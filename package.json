@@ -1,0 +1,158 @@
+{
+  "name": "@panomapp/mesh",
+  "version": "1.0.0",
+  "description": "Application mesh runtime for multi-instance Node.js apps, local orchestration, Podman deployment, routing, observability and distributed coordination.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "mesh": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js",
+      "require": "./dist/config/index.cjs"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "require": "./dist/runtime/index.cjs"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js",
+      "require": "./dist/cli/index.cjs"
+    },
+    "./router": {
+      "types": "./dist/router/index.d.ts",
+      "import": "./dist/router/index.js",
+      "require": "./dist/router/index.cjs"
+    },
+    "./registry": {
+      "types": "./dist/registry/index.d.ts",
+      "import": "./dist/registry/index.js",
+      "require": "./dist/registry/index.cjs"
+    },
+    "./registry/redis": {
+      "types": "./dist/registry/redis/index.d.ts",
+      "import": "./dist/registry/redis/index.js",
+      "require": "./dist/registry/redis/index.cjs"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js",
+      "require": "./dist/node/index.cjs"
+    },
+    "./events": {
+      "types": "./dist/events/index.d.ts",
+      "import": "./dist/events/index.js",
+      "require": "./dist/events/index.cjs"
+    },
+    "./drain": {
+      "types": "./dist/drain/index.d.ts",
+      "import": "./dist/drain/index.js",
+      "require": "./dist/drain/index.cjs"
+    },
+    "./podman": {
+      "types": "./dist/podman/index.d.ts",
+      "import": "./dist/podman/index.js",
+      "require": "./dist/podman/index.cjs"
+    },
+    "./hsm": {
+      "types": "./dist/hsm/index.d.ts",
+      "import": "./dist/hsm/index.js",
+      "require": "./dist/hsm/index.cjs"
+    },
+    "./observability": {
+      "types": "./dist/observability/index.d.ts",
+      "import": "./dist/observability/index.js",
+      "require": "./dist/observability/index.cjs"
+    },
+    "./streaming": {
+      "types": "./dist/streaming/index.d.ts",
+      "import": "./dist/streaming/index.js",
+      "require": "./dist/streaming/index.cjs"
+    },
+    "./locks": {
+      "types": "./dist/locks/index.d.ts",
+      "import": "./dist/locks/index.js",
+      "require": "./dist/locks/index.cjs"
+    },
+    "./leader": {
+      "types": "./dist/leader/index.d.ts",
+      "import": "./dist/leader/index.js",
+      "require": "./dist/leader/index.cjs"
+    },
+    "./cleanup": {
+      "types": "./dist/cleanup/index.d.ts",
+      "import": "./dist/cleanup/index.js",
+      "require": "./dist/cleanup/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsup",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm pack --dry-run"
+  },
+  "keywords": [
+    "mesh",
+    "orchestrator",
+    "multi-instance",
+    "process-manager",
+    "gateway",
+    "nodejs",
+    "podman",
+    "docker",
+    "panom",
+    "graceful-shutdown",
+    "podman",
+    "quadlet",
+    "reverse-proxy",
+    "sticky-session",
+    "hsm",
+    "routing",
+    "schema",
+    "dashboard",
+    "observability",
+    "metrics",
+    "streaming",
+    "redis",
+    "pubsub",
+    "distributed-logs",
+    "locks",
+    "leader-election",
+    "cleanup",
+    "coordination",
+    "distributed-locks"
+  ],
+  "dependencies": {
+    "jiti": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

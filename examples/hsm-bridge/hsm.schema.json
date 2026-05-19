@@ -1,0 +1,17 @@
+{
+  "kind": "panom-hsm.schema",
+  "id": "panom",
+  "version": "1.0.0",
+  "index": {
+    "states": [
+      { "id": "landing.home", "tags": ["public"] },
+      { "id": "app.profile", "tags": ["app"], "backend": { "routes": ["/api/profile/:username"], "methods": ["GET"] } },
+      { "id": "cloud.media", "tags": ["cloud"], "backend": { "routes": ["/api/cloud/media"] } }
+    ],
+    "routes": [
+      { "stateId": "landing.home", "canonicalPattern": "/", "kind": "canonical" },
+      { "stateId": "app.profile", "canonicalPattern": "/profile/:username", "kind": "canonical" },
+      { "stateId": "cloud.media", "canonicalPattern": "/cloud/media", "kind": "canonical" }
+    ]
+  }
+}

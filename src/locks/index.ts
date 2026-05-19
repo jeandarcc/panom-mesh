@@ -1,0 +1,7 @@
+export { LockManager } from './LockManager.js'
+export { LockLease } from './LockLease.js'
+export { MemoryLockBackend } from './MemoryLockBackend.js'
+export { LockFactory } from './LockFactory.js'
+export { MeshLockError, MeshLockTimeoutError } from './LockErrors.js'
+export { RedisLockBackend } from './redis/RedisLockBackend.js'
+export type { MeshLockAcquireOptions, MeshLockBackend, MeshLockLease, MeshLockRecord, MeshLockRunOptions } from './types.js'

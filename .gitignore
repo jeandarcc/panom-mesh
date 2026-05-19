@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+lib/
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# Test / cache
+.vitest/
+.nyc_output/
+.cache/
+.tmp/
+temp/
+tmp/
+
+# Mesh runtime state
+.mesh/
+mesh.state.json
+mesh.lock
+mesh.pid
+
+# Mesh generated runtime artifacts
+*.log
+logs/
+pids/
+
+# Package artifacts
+*.tgz
+*.tar.gz
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Local npm/yarn/pnpm
+.npm/
+.pnpm-store/
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Local config overrides
+*.local
+mesh.config.local.ts
+mesh.config.local.js
+
+# Podman / generated deployment output
+quadlet.out/
+podman.out/
+.mesh-generated/
