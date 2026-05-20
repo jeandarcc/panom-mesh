@@ -21,10 +21,14 @@ export class MeshStateStore {
     }
     try {
       const text = await fs.promises.readFile(this.statePath, 'utf8')
-      const parsed = JSON.parse(text) as MeshStateFile
+      const parsed = this.parseState(text)
       if (parsed.version !== 1) throw new MeshStateError(`Unsupported mesh state version: ${String(parsed.version)}`)
       return parsed
     } catch (error) {
+      if (error instanceof SyntaxError) {
+        const recovered = await this.recoverCorruptedState()
+        if (recovered) return recovered
+      }
       if (error instanceof MeshStateError) throw error
       throw new MeshStateError(`Failed to read mesh state: ${(error as Error).message}`)
     }
@@ -68,5 +72,69 @@ export class MeshStateStore {
       updatedAt: nowIso(),
       instances: []
     }
+  }
+
+  private parseState(text: string): MeshStateFile {
+    return JSON.parse(text) as MeshStateFile
+  }
+
+  private async recoverCorruptedState(): Promise<MeshStateFile | null> {
+    const text = await fs.promises.readFile(this.statePath, 'utf8')
+    const prefix = this.extractRootJsonPrefix(text)
+    if (!prefix) return null
+
+    try {
+      const parsed = this.parseState(prefix)
+      if (parsed.version !== 1) throw new MeshStateError(`Unsupported mesh state version: ${String(parsed.version)}`)
+      await atomicWriteJson(this.statePath, parsed)
+      return parsed
+    } catch {
+      return null
+    }
+  }
+
+  private extractRootJsonPrefix(text: string): string | null {
+    const start = text.search(/\s*[{[]/)
+    if (start < 0) return null
+
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index]
+
+      if (inString) {
+        if (escaped) {
+          escaped = false
+          continue
+        }
+        if (char === '\\') {
+          escaped = true
+          continue
+        }
+        if (char === '"') inString = false
+        continue
+      }
+
+      if (char === '"') {
+        inString = true
+        continue
+      }
+
+      if (char === '{' || char === '[') {
+        depth += 1
+        continue
+      }
+
+      if (char === '}' || char === ']') {
+        depth -= 1
+        if (depth === 0) {
+          return text.slice(start, index + 1)
+        }
+      }
+    }
+
+    return null
   }
 }

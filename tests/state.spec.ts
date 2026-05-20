@@ -32,4 +32,30 @@ describe('MeshStateStore', () => {
     const state = await store.read()
     expect(state.instances.map(item => item.id)).toEqual(['api-a', 'api-b'])
   })
+
+  it('recovers corrupted trailing state and rewrites a clean file', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-state-'))
+    const store = new MeshStateStore('test-app', dir)
+    const clean = {
+      version: 1,
+      app: 'test-app',
+      updatedAt: new Date().toISOString(),
+      instances: [record('api-a')]
+    }
+    await fs.promises.mkdir(dir, { recursive: true })
+    await fs.promises.writeFile(
+      store.statePath,
+      `${JSON.stringify(clean, null, 2)}\nthis is trailing garbage from an interrupted mesh run\n`,
+      'utf8'
+    )
+
+    const recovered = await store.read()
+    expect(recovered.instances).toHaveLength(1)
+    expect(recovered.instances[0]?.id).toBe('api-a')
+
+    const rewritten = await fs.promises.readFile(store.statePath, 'utf8')
+    expect(() => JSON.parse(rewritten)).not.toThrow()
+    expect(rewritten).toContain('"instances"')
+    expect(rewritten).not.toContain('trailing garbage')
+  })
 })
