@@ -74,6 +74,84 @@ describe('MeshRouterServer', () => {
     expect(res.body).toContain('/api/posts?x=1')
     expect(res.headers['set-cookie']?.[0]).toContain('pm_mesh=')
   })
+
+  it('does not forward browser cookies to frontend services', async () => {
+    const projectRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-router-frontend-cookies-'))
+    const stateDir = path.join(projectRoot, '.mesh')
+    const frontend = await listen((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ cookie: req.headers.cookie ?? null, service: 'frontend' }))
+    })
+    cleanup.push(frontend.close)
+
+    const routerPort = await freePort()
+    const config = new MeshConfigNormalizer().normalize({
+      app: 'test-frontend-cookies',
+      router: { port: routerPort, secret: 'test-secret-123' },
+      runtime: { stateDir, logsDir: path.join(stateDir, 'logs') },
+      services: {
+        frontend: {
+          type: 'frontend',
+          command: 'npm run dev',
+          route: '/'
+        }
+      }
+    }, projectRoot, path.join(projectRoot, 'mesh.config.ts'))
+
+    const store = new MeshStateStore('test-frontend-cookies', stateDir)
+    await store.upsert({
+      ...record('frontend', '/', frontend.port, process.pid),
+      serviceType: 'frontend'
+    })
+
+    const router = new MeshRouterServer({ config })
+    await router.listen()
+    cleanup.push(() => router.close())
+
+    const res = await request(routerPort, '/auth', {
+      cookie: `pm_mesh=mesh-cookie; session=real-session; theme=dark`
+    })
+    expect(res.status).toBe(200)
+    expect(res.body).toContain('"cookie":null')
+  })
+
+  it('strips only mesh sticky cookie for backend services', async () => {
+    const projectRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-router-backend-cookies-'))
+    const stateDir = path.join(projectRoot, '.mesh')
+    const api = await listen((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ cookie: req.headers.cookie ?? null, service: 'api' }))
+    })
+    cleanup.push(api.close)
+
+    const routerPort = await freePort()
+    const config = new MeshConfigNormalizer().normalize({
+      app: 'test-backend-cookies',
+      router: { port: routerPort, secret: 'test-secret-123' },
+      runtime: { stateDir, logsDir: path.join(stateDir, 'logs') },
+      services: {
+        api: {
+          type: 'backend',
+          command: 'npm run dev',
+          route: '/api'
+        }
+      }
+    }, projectRoot, path.join(projectRoot, 'mesh.config.ts'))
+
+    const store = new MeshStateStore('test-backend-cookies', stateDir)
+    await store.upsert(record('api', '/api', api.port, process.pid))
+
+    const router = new MeshRouterServer({ config })
+    await router.listen()
+    cleanup.push(() => router.close())
+
+    const res = await request(routerPort, '/api/session', {
+      cookie: `pm_mesh=mesh-cookie; session=real-session; theme=dark`
+    })
+    expect(res.status).toBe(200)
+    expect(res.body).toContain('session=real-session; theme=dark')
+    expect(res.body).not.toContain('pm_mesh=')
+  })
 })
 
 describe('MeshRouterServer management endpoints', () => {
@@ -146,9 +224,13 @@ async function freePort(): Promise<number> {
   return port
 }
 
-async function request(port: number, pathName: string): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
+async function request(
+  port: number,
+  pathName: string,
+  headers: http.OutgoingHttpHeaders = {}
+): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return await new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: pathName }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: pathName, headers }, res => {
       let body = ''
       res.setEncoding('utf8')
       res.on('data', chunk => { body += chunk })

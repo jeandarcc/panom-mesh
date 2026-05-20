@@ -107,7 +107,7 @@ export class MeshRouterServer {
       if (setCookie) res.setHeader('Set-Cookie', setCookie)
       this.balancer.begin(instance.id)
       const endTracked = this.tracker.beginHttp(instance.id)
-      await this.proxyHttp(req, res, target, requestId)
+      await this.proxyHttp(req, res, target, requestId, instance.serviceType)
         .finally(() => {
           endTracked()
           this.balancer.end(instance.id)
@@ -139,8 +139,12 @@ export class MeshRouterServer {
       this.balancer.begin(instance.id)
       const targetSocket = net.connect(Number(target.port || 80), target.hostname, () => {
         const path = `${target.pathname}${target.search}`
+        const proxiedHeaders = this.headers.build(req.headers, target, req.socket.remoteAddress, {
+          serviceType: instance.serviceType,
+          meshCookieName: this.options.config.router.cookieName
+        })
         targetSocket.write(`${req.method ?? 'GET'} ${path} HTTP/${req.httpVersion}\r\n`)
-        for (const [key, value] of Object.entries(req.headers)) {
+        for (const [key, value] of Object.entries(proxiedHeaders)) {
           if (key.toLowerCase() === 'host') continue
           if (Array.isArray(value)) {
             for (const item of value) targetSocket.write(`${key}: ${item}\r\n`)
@@ -240,11 +244,20 @@ export class MeshRouterServer {
   }
 
 
-  private async proxyHttp(req: IncomingMessage, res: ServerResponse, target: URL, requestId: string): Promise<void> {
+  private async proxyHttp(
+    req: IncomingMessage,
+    res: ServerResponse,
+    target: URL,
+    requestId: string,
+    serviceType: import('../core/types.js').MeshServiceType
+  ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const proxyReq = http.request(target, {
         method: req.method,
-        headers: this.headers.build(req.headers, target, req.socket.remoteAddress),
+        headers: this.headers.build(req.headers, target, req.socket.remoteAddress, {
+          serviceType,
+          meshCookieName: this.options.config.router.cookieName
+        }),
         timeout: this.options.config.router.requestTimeoutMs
       }, proxyRes => {
         res.statusCode = proxyRes.statusCode ?? 502
