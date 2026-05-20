@@ -1,6 +1,6 @@
 {
   "name": "@panomapp/mesh",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Application mesh runtime for multi-instance Node.js apps, local orchestration, Podman deployment, routing, observability and distributed coordination.",
   "license": "MIT",
   "type": "module",
