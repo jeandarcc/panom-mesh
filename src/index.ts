@@ -54,12 +54,14 @@ export type {
   MeshCiConfig,
   MeshCiFrontendConfig,
   MeshCiBackendConfig,
+  MeshCiDrsConfig,
   MeshCiFrontendStrategy,
   MeshCiBackendStrategy,
   MeshCiGenerateOptions,
   NormalizedMeshCiConfig,
   NormalizedMeshCiFrontendConfig,
   NormalizedMeshCiBackendConfig,
+  NormalizedMeshCiDrsConfig,
 } from './core/types.js'
 export { CiGenerateCommand } from './ci/CiGenerateCommand.js'
 export type { MeshRegistry, MeshRegistryFactory } from './registry/types.js'

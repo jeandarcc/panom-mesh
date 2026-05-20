@@ -19,5 +19,16 @@ export type {
   MeshHsmServiceBinding,
   MeshHsmServiceMapping,
   MeshHsmMappedRoute,
-  NormalizedMeshHsmBridgeConfig
+  NormalizedMeshHsmBridgeConfig,
+  MeshCiConfig,
+  MeshCiFrontendConfig,
+  MeshCiBackendConfig,
+  MeshCiDrsConfig,
+  MeshCiFrontendStrategy,
+  MeshCiBackendStrategy,
+  MeshCiGenerateOptions,
+  NormalizedMeshCiConfig,
+  NormalizedMeshCiFrontendConfig,
+  NormalizedMeshCiBackendConfig,
+  NormalizedMeshCiDrsConfig
 } from '../core/types.js'

@@ -520,6 +520,10 @@ export interface MeshCiBackendConfig {
   readonly envSecrets?: readonly string[]
 }
 
+export interface MeshCiDrsConfig {
+  readonly enabled?: boolean
+}
+
 /**
  * Top-level `ci:` block inside `mesh.config.ts`.
  * Used by `mesh ci:generate` to produce per-repo GitHub Actions workflows.
@@ -529,6 +533,7 @@ export interface MeshCiConfig {
   readonly branch?: string
   readonly frontend?: MeshCiFrontendConfig
   readonly backend?: MeshCiBackendConfig
+  readonly drs?: MeshCiDrsConfig
 }
 
 export interface NormalizedMeshCiFrontendConfig {
@@ -541,11 +546,16 @@ export interface NormalizedMeshCiBackendConfig {
   readonly envSecrets: readonly string[]
 }
 
+export interface NormalizedMeshCiDrsConfig {
+  readonly enabled: boolean
+}
+
 export interface NormalizedMeshCiConfig {
   readonly enabled: boolean
   readonly branch: string
   readonly frontend: NormalizedMeshCiFrontendConfig
   readonly backend: NormalizedMeshCiBackendConfig
+  readonly drs: NormalizedMeshCiDrsConfig
 }
 
 export interface MeshCiGenerateOptions {

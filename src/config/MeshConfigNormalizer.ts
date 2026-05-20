@@ -462,6 +462,9 @@ export class MeshConfigNormalizer {
       backend: {
         strategy: ci.backend?.strategy ?? 'podman',
         envSecrets: ci.backend?.envSecrets ?? derivedBackendSecrets()
+      },
+      drs: {
+        enabled: ci.drs?.enabled ?? false
       }
     }
   }

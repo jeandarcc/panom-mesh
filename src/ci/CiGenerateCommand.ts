@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../utils/fs.js'
+import { formatNpmInstallCommand, getDrsRegistryInstallSpecifiers } from './drs.js'
 import type {
   NormalizedMeshConfig,
   NormalizedMeshServiceConfig,
@@ -100,10 +101,21 @@ export class CiGenerateCommand {
       : this.frontendRsyncWorkflow(svc, ci)
   }
 
-  private frontendRsyncWorkflow(_svc: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
+  private frontendInstallCommand(svc: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
+    if (!ci.drs.enabled) {
+      return 'npm ci'
+    }
+
+    const specifiers = getDrsRegistryInstallSpecifiers(this.config.projectRoot, svc.cwd)
+    return formatNpmInstallCommand(specifiers)
+  }
+
+  private frontendRsyncWorkflow(svc: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
     const buildArgs = ci.frontend.buildArgs
     const buildEnvLines = buildArgs.map(k => `          ${k}: ${this.ghaSecret(k)}`).join('\n')
     const buildEnvBlock = buildArgs.length > 0 ? '\n' + buildEnvLines : ''
+    const installCommand = this.frontendInstallCommand(svc, ci)
+    const installStepName = ci.drs.enabled ? 'Install DRS registry packages' : 'Install Dependencies'
 
     return [
       'name: Deploy Frontend',
@@ -127,8 +139,9 @@ export class CiGenerateCommand {
       '          node-version: 20',
       '          cache: npm',
       '',
-      '      - name: Install Dependencies',
-      '        run: npm ci',
+      '      - name: ' + installStepName,
+      '        run: |',
+      '          ' + installCommand,
       '',
       '      - name: Build Frontend',
       '        env:',
@@ -203,6 +216,8 @@ export class CiGenerateCommand {
       '            --build-arg VITE_API_URL="$VITE_API_URL" \\',
       ...buildArgs.map(k => '            --build-arg ' + k + '="$' + k + '" \\'),
     ].join('\n')
+    const installCommand = this.frontendInstallCommand(svc, ci)
+    const installStepName = ci.drs.enabled ? 'Install DRS registry packages' : 'Install Dependencies'
 
     return [
       'name: Deploy Frontend',
@@ -226,6 +241,16 @@ export class CiGenerateCommand {
       '    steps:',
       '      - name: Checkout',
       '        uses: actions/checkout@v4',
+      '',
+      '      - name: Setup Node',
+      '        uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version: 20',
+      '          cache: npm',
+      '',
+      '      - name: ' + installStepName,
+      '        run: |',
+      '          ' + installCommand,
       '',
       '      - name: Login GHCR',
       '        env:',
