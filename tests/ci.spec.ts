@@ -16,19 +16,44 @@ function makeTempRoot(): string {
 }
 
 function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
-  fs.mkdirSync(path.join(root, 'panom-hsm-contract', 'src'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'panom-hsm-contract', 'package.json'), JSON.stringify({
+  writeLocalPackage(root, 'panom-subdomain', {
+    name: '@panomapp/subdomain-policy',
+    version: '0.1.0',
+    scripts: {
+      'pack:check': 'echo pack',
+    },
+  })
+
+  writeLocalPackage(root, 'panom-hsm', {
+    name: '@panomapp/hsm',
+    version: '1.0.1',
+    scripts: {
+      build: 'echo build',
+    },
+    dependencies: {
+      '@panomapp/subdomain-policy': '^0.1.0',
+    },
+  })
+
+  writeLocalPackage(root, 'panom-hsm-contract', {
     name: '@panomapp/hsm-panom-contract',
     version: '3.0.0',
     scripts: {
       build: 'echo build',
     },
-  }, null, 2))
-  fs.writeFileSync(path.join(root, 'panom-hsm-contract', 'package-lock.json'), JSON.stringify({
-    name: '@panomapp/hsm-panom-contract',
-    lockfileVersion: 3,
-  }, null, 2))
-  fs.writeFileSync(path.join(root, 'panom-hsm-contract', 'src', 'index.ts'), 'export const contract = true\n')
+    dependencies: {
+      '@panomapp/hsm': '^1.0.1',
+    },
+  })
+
+  writeLocalPackage(root, 'bg-maker', {
+    name: '@panomapp/bg-maker',
+    version: '0.1.0',
+    scripts: {
+      build: 'echo build',
+    },
+  })
+
   fs.writeFileSync(
     path.join(root, 'drs.config.json'),
     JSON.stringify({
@@ -77,6 +102,17 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
   )
 }
 
+function writeLocalPackage(root: string, localPath: string, packageJson: Record<string, unknown>): void {
+  const packageDir = path.join(root, localPath)
+  fs.mkdirSync(path.join(packageDir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify(packageJson, null, 2))
+  fs.writeFileSync(path.join(packageDir, 'package-lock.json'), JSON.stringify({
+    name: packageJson.name,
+    lockfileVersion: 3,
+  }, null, 2))
+  fs.writeFileSync(path.join(packageDir, 'src', 'index.ts'), `export const pkg = '${String(packageJson.name)}'\n`)
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()!
@@ -85,7 +121,7 @@ afterEach(() => {
 })
 
 describe('Mesh CI generation', () => {
-  it('uses DRS source and registry install specs when ci.drs is enabled', async () => {
+  it('uses generated source packages for all DRS dependencies when ci.drs is enabled', async () => {
     const root = makeTempRoot()
     writeDrsConfig(root)
 
@@ -113,15 +149,31 @@ describe('Mesh CI generation', () => {
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
     expect(output).toContain('Prepare @panomapp/hsm-panom-contract source')
+    expect(output).toContain('Prepare @panomapp/subdomain-policy source')
+    expect(output).toContain('Prepare @panomapp/hsm source')
+    expect(output).toContain('Prepare @panomapp/bg-maker source')
     expect(output).toContain('working-directory: generated_modules/panom-hsm-contract')
-    expect(output).toContain('npm ci')
-    expect(output).toContain('npm run build')
+    expect(output).toContain('working-directory: generated_modules/panom-subdomain')
+    expect(output).toContain('working-directory: generated_modules/panom-hsm')
+    expect(output).toContain('working-directory: generated_modules/bg-maker')
+    expect(output).toContain('npm install')
     expect(output).toContain('Install DRS dependencies')
     expect(output).toContain(
-      'npm install @panomapp/hsm@^1.0.1 @panomapp/subdomain-policy@^0.1.0 @panomapp/bg-maker@^0.1.0 file:./generated_modules/panom-hsm-contract'
+      'npm install file:./generated_modules/panom-subdomain file:./generated_modules/bg-maker file:./generated_modules/panom-hsm file:./generated_modules/panom-hsm-contract'
     )
+    expect(output).not.toContain('@panomapp/hsm@^1.0.1')
+    expect(output).not.toContain('@panomapp/subdomain-policy@^0.1.0')
+    expect(output).not.toContain('@panomapp/bg-maker@^0.1.0')
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
     expect(fs.existsSync(path.join(root, 'panom-frontend', 'generated_modules', 'panom-hsm-contract', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-frontend', 'generated_modules', 'panom-hsm', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-frontend', 'generated_modules', 'panom-subdomain', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-frontend', 'generated_modules', 'bg-maker', 'package.json'))).toBe(true)
+    const hsmGeneratedPackage = JSON.parse(fs.readFileSync(
+      path.join(root, 'panom-frontend', 'generated_modules', 'panom-hsm', 'package.json'),
+      'utf8'
+    )) as { dependencies?: Record<string, string> }
+    expect(hsmGeneratedPackage.dependencies?.['@panomapp/subdomain-policy']).toBe('file:../panom-subdomain')
   })
 
   it('uses DRS source packages in the backend workflow when ci.drs is enabled', async () => {
@@ -152,13 +204,17 @@ describe('Mesh CI generation', () => {
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
     expect(output).toContain('Prepare @panomapp/hsm-panom-contract source')
+    expect(output).toContain('Prepare @panomapp/hsm source')
     expect(output).toContain('working-directory: generated_modules/panom-hsm-contract')
+    expect(output).toContain('working-directory: generated_modules/panom-hsm')
     expect(output).toContain('Install DRS dependencies')
-    expect(output).toContain('npm install @panomapp/hsm@^1.0.1 file:./generated_modules/panom-hsm-contract')
+    expect(output).toContain('npm install file:./generated_modules/panom-hsm file:./generated_modules/panom-hsm-contract')
     expect(output).toContain('docker build -t')
     expect(output).toContain('-f Dockerfile .')
+    expect(output).not.toContain('@panomapp/hsm@^1.0.1')
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
     expect(fs.existsSync(path.join(root, 'panom-backend', 'generated_modules', 'panom-hsm-contract', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-backend', 'generated_modules', 'panom-hsm', 'package.json'))).toBe(true)
   })
 
   it('uses DRS source packages in the backend quadlet workflow when ci.drs is enabled', async () => {
@@ -192,9 +248,10 @@ describe('Mesh CI generation', () => {
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
     expect(output).toContain('Install DRS dependencies')
-    expect(output).toContain('npm install @panomapp/hsm@^1.0.1 file:./generated_modules/panom-hsm-contract')
+    expect(output).toContain('npm install file:./generated_modules/panom-hsm file:./generated_modules/panom-hsm-contract')
     expect(output).toContain('Generate Quadlet files')
     expect(output).toContain('rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" .mesh/quadlet/')
+    expect(output).not.toContain('@panomapp/hsm@^1.0.1')
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
   })
 

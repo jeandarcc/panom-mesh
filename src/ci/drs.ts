@@ -30,6 +30,7 @@ export interface DrsSourcePackagePlan {
   readonly generatedPath: string
   readonly installSpecifier: string
   readonly buildCommand?: string
+  readonly dependencyNames: readonly string[]
 }
 
 export interface DrsWorkflowPlan {
@@ -56,6 +57,7 @@ export function getDrsWorkflowPlan(projectRoot: string, consumerCwd: string): Dr
 
   const installSpecifiers: string[] = []
   const sourcePackages: DrsSourcePackagePlan[] = []
+  const sourcePackageNames = new Set<string>()
 
   for (const packageName of consumerEntry.dependencies) {
     const packageEntry = config.packages[packageName]
@@ -64,11 +66,10 @@ export function getDrsWorkflowPlan(projectRoot: string, consumerCwd: string): Dr
     }
 
     const absoluteLocalPath = path.resolve(drsRoot, packageEntry.local.path)
-    const isOnlySource = packageEntry['only-source'] === true
     const sourceTargets = packageEntry.to ?? []
     const sourceForConsumer = sourceTargets.length === 0 || sourceTargets.includes(consumerSlug)
 
-    if (!isOnlySource || !sourceForConsumer) {
+    if (!sourceForConsumer) {
       installSpecifiers.push(`${packageName}@${packageEntry.registry.version}`)
       continue
     }
@@ -80,23 +81,36 @@ export function getDrsWorkflowPlan(projectRoot: string, consumerCwd: string): Dr
     }
 
     const generatedPath = resolveGeneratedModulePath(packageEntry.local.path)
+    sourcePackageNames.add(packageName)
     sourcePackages.push({
       name: packageName,
       sourcePath: path.relative(projectRoot, absoluteLocalPath) || '.',
       generatedPath,
       installSpecifier: `file:./${generatedPath}`,
       buildCommand: packageEntry.local.build,
+      dependencyNames: [],
     })
   }
 
-  const allSpecifiers = [...installSpecifiers, ...sourcePackages.map(pkg => pkg.installSpecifier)]
+  const sourcePackagesByName = new Map(sourcePackages.map(pkg => [pkg.name, pkg]))
+  for (let index = 0; index < sourcePackages.length; index += 1) {
+    const sourcePackage = sourcePackages[index]
+    const packageJson = readPackageJson(path.resolve(projectRoot, sourcePackage.sourcePath), sourcePackage.name)
+    sourcePackages[index] = {
+      ...sourcePackage,
+      dependencyNames: listDrsDependencies(packageJson, sourcePackageNames),
+    }
+  }
+
+  const orderedSourcePackages = sortSourcePackages(sourcePackages)
+  const allSpecifiers = [...installSpecifiers, ...orderedSourcePackages.map(pkg => pkg.installSpecifier)]
 
   return {
     consumerPath: path.relative(projectRoot, normalizedConsumerPath) || '.',
     consumerSlug,
     installSpecifiers: allSpecifiers,
     installCommand: formatNpmInstallCommand(allSpecifiers),
-    sourcePackages,
+    sourcePackages: orderedSourcePackages,
   }
 }
 
@@ -120,6 +134,11 @@ export async function syncDrsGeneratedModules(projectRoot: string, consumerCwd: 
     })
     await pruneGeneratedNoise(absoluteGeneratedPath)
   }
+
+  const generatedPackages = new Map(plan.sourcePackages.map(pkg => [pkg.name, pkg]))
+  for (const sourcePackage of plan.sourcePackages) {
+    await rewriteGeneratedPackageManifest(path.join(consumerCwd, sourcePackage.generatedPath), generatedPackages)
+  }
 }
 
 function resolveGeneratedModulePath(localPath: string): string {
@@ -142,6 +161,117 @@ async function pruneGeneratedNoise(dir: string): Promise<void> {
       await pruneGeneratedNoise(target)
     }
   }
+}
+
+async function rewriteGeneratedPackageManifest(
+  generatedPackageDir: string,
+  generatedPackages: ReadonlyMap<string, DrsSourcePackagePlan>
+): Promise<void> {
+  const packageJsonPath = path.join(generatedPackageDir, 'package.json')
+  if (!fs.existsSync(packageJsonPath)) {
+    throw new Error(`Generated DRS package is missing package.json: ${generatedPackageDir}`)
+  }
+
+  const packageJson = JSON.parse(await fs.promises.readFile(packageJsonPath, 'utf8')) as PackageJson
+  rewriteDependencyBlock(packageJson.dependencies, generatedPackageDir, generatedPackages)
+  rewriteDependencyBlock(packageJson.devDependencies, generatedPackageDir, generatedPackages)
+  rewriteDependencyBlock(packageJson.peerDependencies, generatedPackageDir, generatedPackages)
+  rewriteDependencyBlock(packageJson.optionalDependencies, generatedPackageDir, generatedPackages)
+
+  await fs.promises.writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8')
+  await fs.promises.rm(path.join(generatedPackageDir, 'package-lock.json'), { force: true })
+}
+
+function rewriteDependencyBlock(
+  dependencies: Record<string, string> | undefined,
+  generatedPackageDir: string,
+  generatedPackages: ReadonlyMap<string, DrsSourcePackagePlan>
+): void {
+  if (!dependencies) return
+
+  for (const dependencyName of Object.keys(dependencies)) {
+    const generatedDependency = generatedPackages.get(dependencyName)
+    if (!generatedDependency) continue
+    const consumerRoot = generatedPackageDir.split(`${path.sep}${GENERATED_MODULES_DIR}${path.sep}`)[0]
+    const targetDir = path.join(consumerRoot, generatedDependency.generatedPath)
+    dependencies[dependencyName] = `file:${path.relative(generatedPackageDir, targetDir) || '.'}`
+  }
+}
+
+interface PackageJson {
+  readonly name?: string
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+}
+
+function readPackageJson(packageDir: string, packageName: string): PackageJson {
+  const packageJsonPath = path.join(packageDir, 'package.json')
+  if (!fs.existsSync(packageJsonPath)) {
+    throw new Error(`DRS package "${packageName}" is missing package.json at ${packageJsonPath}.`)
+  }
+  return JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as PackageJson
+}
+
+function listDrsDependencies(packageJson: PackageJson, sourcePackageNames: ReadonlySet<string>): readonly string[] {
+  const names = new Set<string>()
+  for (const block of [
+    packageJson.dependencies,
+    packageJson.devDependencies,
+    packageJson.optionalDependencies,
+  ]) {
+    for (const dependencyName of Object.keys(block ?? {})) {
+      if (sourcePackageNames.has(dependencyName)) {
+        names.add(dependencyName)
+      }
+    }
+  }
+  return [...names]
+}
+
+function sortSourcePackages(sourcePackages: readonly DrsSourcePackagePlan[]): readonly DrsSourcePackagePlan[] {
+  const byName = new Map(sourcePackages.map(pkg => [pkg.name, pkg]))
+  const remainingDependencies = new Map<string, Set<string>>()
+  const dependents = new Map<string, Set<string>>()
+
+  for (const sourcePackage of sourcePackages) {
+    const dependencies = new Set(sourcePackage.dependencyNames.filter(name => byName.has(name)))
+    remainingDependencies.set(sourcePackage.name, dependencies)
+    for (const dependencyName of dependencies) {
+      const nextDependents = dependents.get(dependencyName) ?? new Set<string>()
+      nextDependents.add(sourcePackage.name)
+      dependents.set(dependencyName, nextDependents)
+    }
+  }
+
+  const ready = sourcePackages
+    .filter(pkg => (remainingDependencies.get(pkg.name)?.size ?? 0) === 0)
+    .map(pkg => pkg.name)
+  const ordered: DrsSourcePackagePlan[] = []
+
+  while (ready.length > 0) {
+    const nextName = ready.shift()!
+    ordered.push(byName.get(nextName)!)
+    for (const dependentName of dependents.get(nextName) ?? []) {
+      const dependencySet = remainingDependencies.get(dependentName)
+      if (!dependencySet) continue
+      dependencySet.delete(nextName)
+      if (dependencySet.size === 0) {
+        ready.push(dependentName)
+      }
+    }
+  }
+
+  if (ordered.length !== sourcePackages.length) {
+    const unresolved = sourcePackages
+      .filter(pkg => !ordered.some(candidate => candidate.name === pkg.name))
+      .map(pkg => pkg.name)
+      .join(', ')
+    throw new Error(`DRS source packages contain a dependency cycle: ${unresolved}`)
+  }
+
+  return ordered
 }
 
 function loadDrsConfig(projectRoot: string): DrsConfigFile {

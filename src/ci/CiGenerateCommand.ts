@@ -134,7 +134,7 @@ export class CiGenerateCommand {
         '      - name: Prepare ' + sourcePackage.name + ' source',
         '        working-directory: ' + sourcePackage.generatedPath,
         '        run: |',
-          '          npm ci',
+          '          npm install',
           '          ' + (sourcePackage.buildCommand ?? 'npm run build'),
         '',
       )
