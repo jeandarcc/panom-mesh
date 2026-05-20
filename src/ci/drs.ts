@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-interface DrsPackageEntry {
+export interface DrsPackageEntry {
   readonly to?: readonly string[]
   readonly 'only-source'?: boolean
+  readonly prebuilt?: boolean
   readonly local: {
     readonly path: string
     readonly build?: string
@@ -293,6 +294,15 @@ function loadDrsConfig(projectRoot: string): DrsConfigFile {
     packages: raw.packages as Record<string, DrsPackageEntry>,
     consumers: raw.consumers as Record<string, DrsConsumerEntry>,
   }
+}
+
+export function getDrsPackageEntry(projectRoot: string, packageName: string): DrsPackageEntry {
+  const config = loadDrsConfig(projectRoot)
+  const entry = config.packages[packageName]
+  if (!entry) {
+    throw new Error(`DRS package "${packageName}" is not defined in ${path.join(projectRoot, 'drs.config.json')}.`)
+  }
+  return entry
 }
 
 function findConsumerEntry(

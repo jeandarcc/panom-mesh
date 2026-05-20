@@ -46,21 +46,24 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
     },
   })
 
-  writeLocalPackage(root, 'bg-maker', {
-    name: '@panomapp/bg-maker',
-    version: '0.1.0',
-    scripts: {
-      build: 'echo build',
-    },
-  })
+      writeLocalPackage(root, 'bg-maker', {
+        name: '@panomapp/bg-maker',
+        version: '0.1.0',
+        scripts: {
+          build: 'echo build',
+        },
+      })
 
-  writeLocalPackage(root, 'panom-mesh', {
-    name: '@panomapp/mesh',
-    version: '1.0.0',
-    scripts: {
-      build: 'echo build',
-    },
-  })
+      writeLocalPackage(root, 'panom-mesh', {
+        name: '@panomapp/mesh',
+        version: '1.0.0',
+        scripts: {
+          build: 'echo build',
+        },
+        dependencies: {
+          jiti: '^2.4.2',
+        },
+      })
 
   fs.writeFileSync(
     path.join(root, 'drs.config.json'),
@@ -88,6 +91,12 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
           to: ['panom-frontend'],
           local: { path: 'bg-maker', build: 'npm run build' },
           registry: { version: '^0.1.0' },
+        },
+        '@panomapp/mesh': {
+          to: ['panom-backend'],
+          prebuilt: true,
+          local: { path: 'panom-mesh', build: 'npm run build' },
+          registry: { version: '^1.0.0' },
         },
       },
       consumers: {
@@ -313,12 +322,12 @@ describe('Mesh CI generation', () => {
 
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
-    expect(output).toContain('Prepare @panomapp/mesh runtime source')
+    expect(output).toContain('Prepare @panomapp/mesh prebuilt runtime')
     expect(output).toContain('panom-backend-mesh.service')
-    expect(output).toContain('npm run mesh:start')
+    expect(output).toContain('ExecStart=${NODE_BIN}')
     expect(output).toContain('Upload backend mesh runtime bundle')
     expect(output).toContain('http://127.0.0.1:8080/health')
-    expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'package.json'))).toBe(true)
+    expect(output).not.toContain('npm run mesh:start')
     expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'mesh.config.cjs'))).toBe(true)
     expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'generated_modules', 'panom-mesh', 'package.json'))).toBe(true)
     const runtimeConfig = fs.readFileSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'mesh.config.cjs'), 'utf8')

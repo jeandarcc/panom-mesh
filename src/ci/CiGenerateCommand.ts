@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../utils/fs.js'
-import { getDrsWorkflowPlan, syncDrsGeneratedModules } from './drs.js'
+import { getDrsPackageEntry, getDrsWorkflowPlan, syncDrsGeneratedModules } from './drs.js'
 import type {
   NormalizedMeshConfig,
   NormalizedMeshServiceConfig,
@@ -394,7 +394,12 @@ export class CiGenerateCommand {
   ): Promise<void> {
     const runtimeBundleDir = path.join(apiSvc.cwd, RUNTIME_BUNDLE_DIR)
     const generatedModulesDir = path.join(runtimeBundleDir, 'generated_modules')
-    const meshSourceDir = path.join(this.config.projectRoot, 'panom-mesh')
+    const meshPackage = getDrsPackageEntry(this.config.projectRoot, '@panomapp/mesh')
+    if (meshPackage.prebuilt !== true) {
+      throw new Error('DRS package "@panomapp/mesh" must set "prebuilt": true for backend mesh runtime generation.')
+    }
+
+    const meshSourceDir = path.resolve(this.config.projectRoot, meshPackage.local.path)
     const generatedMeshDir = path.join(generatedModulesDir, 'panom-mesh')
 
     if (!fs.existsSync(meshSourceDir)) {
@@ -412,12 +417,6 @@ export class CiGenerateCommand {
     })
 
     await this.pruneGeneratedRuntimeNoise(generatedMeshDir)
-
-    await fs.promises.writeFile(
-      path.join(runtimeBundleDir, 'package.json'),
-      this.renderBackendRuntimePackageJson(),
-      'utf8',
-    )
     await fs.promises.writeFile(
       path.join(runtimeBundleDir, 'mesh.config.cjs'),
       this.renderBackendRuntimeMeshConfig(apiSvc, workerSvc),
@@ -437,21 +436,6 @@ export class CiGenerateCommand {
         await this.pruneGeneratedRuntimeNoise(target)
       }
     }
-  }
-
-  private renderBackendRuntimePackageJson(): string {
-    return `${JSON.stringify({
-      name: `${this.config.app}-backend-mesh-runtime`,
-      private: true,
-      type: 'module',
-      scripts: {
-        'mesh:start': 'mesh run --all --config ./mesh.config.cjs',
-        'mesh:stop': 'mesh podman:stop --config ./mesh.config.cjs --force',
-      },
-      dependencies: {
-        '@panomapp/mesh': 'file:./generated_modules/panom-mesh',
-      },
-    }, null, 2)}\n`
   }
 
   private renderBackendRuntimeMeshConfig(
@@ -862,12 +846,15 @@ module.exports = defineMeshConfig({
       '        uses: actions/checkout@v4',
       '',
       ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
-      '      - name: Prepare @panomapp/mesh runtime source',
-      '        working-directory: .mesh/runtime-bundle/generated_modules/panom-mesh',
-      '        run: |',
-      '          npm install',
-      '          npm run build',
-      '',
+      '      - name: Prepare @panomapp/mesh prebuilt runtime',
+        '        working-directory: .mesh/runtime-bundle/generated_modules/panom-mesh',
+        '        run: |',
+          '          npm install',
+          '          npm run build',
+          '          npm prune --omit=dev',
+          '          rm -rf src tests examples docs',
+          '          rm -f tsconfig.json tsup.config.ts package-lock.json',
+        '',
     ]
 
     const setupNodeStep = [
@@ -963,8 +950,8 @@ module.exports = defineMeshConfig({
       '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       '        run: |',
-      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" \'mkdir -p ~/.panom/backend-runtime\'',
-      '          rsync -az --delete --exclude "node_modules" -e "ssh -p ${DEPLOY_PORT:-22}" ' + runtimeBundlePath + ' "${DEPLOY_USER}@${DEPLOY_HOST}:~/.panom/backend-runtime/"',
+          '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" \'mkdir -p ~/.panom/backend-runtime\'',
+          '          rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" ' + runtimeBundlePath + ' "${DEPLOY_USER}@${DEPLOY_HOST}:~/.panom/backend-runtime/"',
       '',
       '      - name: Write backend mesh environment on server',
       '        env:',
@@ -982,32 +969,74 @@ module.exports = defineMeshConfig({
       '',
       '      - name: Restart backend under Mesh on server',
       '        env:',
-      '          DEPLOY_HOST: ' + this.ghaSecret('DEPLOY_HOST'),
-      '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
-      '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
+          '          DEPLOY_HOST: ' + this.ghaSecret('DEPLOY_HOST'),
+          '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
+          '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       '        run: |',
-      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<\'EOF\'',
-      '            set -euo pipefail',
-      '            APP_DIR="$HOME/.panom/backend-runtime"',
-      '            SERVICE_FILE="$HOME/.config/systemd/user/panom-backend-mesh.service"',
-      '',
-      '            mkdir -p "$HOME/.config/systemd/user"',
-      '            cd "$APP_DIR"',
-      '            npm install',
-      '',
-      '            cat > "$SERVICE_FILE" <<\'UNIT\'',
-      '            [Unit]',
-      '            Description=Panom backend mesh runtime',
-      '            After=network-online.target',
+          '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<\'EOF\'',
+          '            set -euo pipefail',
+          '            APP_DIR="$HOME/.panom/backend-runtime"',
+          '            SERVICE_FILE="$HOME/.config/systemd/user/panom-backend-mesh.service"',
+          '            MESH_CLI_REL="./generated_modules/panom-mesh/dist/cli/index.js"',
+          '',
+          '            resolve_node_bin() {',
+          '              if command -v node >/dev/null 2>&1; then',
+          '                command -v node',
+          '                return 0',
+          '              fi',
+          '              if [ -s "$HOME/.nvm/nvm.sh" ]; then',
+          '                . "$HOME/.nvm/nvm.sh"',
+          '                if command -v node >/dev/null 2>&1; then',
+          '                  command -v node',
+          '                  return 0',
+          '                fi',
+          '              fi',
+          '              if [ -s "$HOME/.asdf/asdf.sh" ]; then',
+          '                . "$HOME/.asdf/asdf.sh"',
+          '                if command -v node >/dev/null 2>&1; then',
+          '                  command -v node',
+          '                  return 0',
+          '                fi',
+          '              fi',
+          '              if [ -x "$HOME/.volta/bin/node" ]; then',
+          '                echo "$HOME/.volta/bin/node"',
+          '                return 0',
+          '              fi',
+          '              if [ -x "$HOME/.local/share/fnm/fnm" ]; then',
+          '                eval "$("$HOME/.local/share/fnm/fnm" env --use-on-cd)"',
+          '                if command -v node >/dev/null 2>&1; then',
+          '                  command -v node',
+          '                  return 0',
+          '                fi',
+          '              fi',
+          '              return 1',
+          '            }',
+          '',
+          '            mkdir -p "$HOME/.config/systemd/user"',
+          '            cd "$APP_DIR"',
+          '            NODE_BIN="$(resolve_node_bin)" || {',
+          '              echo "[deploy] ERROR: node binary could not be resolved for non-interactive shell."',
+          '              exit 1',
+          '            }',
+          '            if [ ! -f "$APP_DIR/$MESH_CLI_REL" ]; then',
+          '              echo "[deploy] ERROR: prebuilt mesh CLI is missing at $APP_DIR/$MESH_CLI_REL"',
+          '              exit 1',
+          '            fi',
+          '',
+          '            cat > "$SERVICE_FILE" <<UNIT',
+          '            [Unit]',
+          '            Description=Panom backend mesh runtime',
+          '            After=network-online.target',
       '            Wants=network-online.target',
-      '',
-      '            [Service]',
-      '            WorkingDirectory=%h/.panom/backend-runtime',
-      '            EnvironmentFile=%h/.panom/backend-runtime/.env',
-      '            ExecStart=/usr/bin/env bash -lc "npm run mesh:start"',
-      '            Restart=always',
-      '            RestartSec=5',
-      '            TimeoutStopSec=20',
+          '',
+          '            [Service]',
+          '            WorkingDirectory=%h/.panom/backend-runtime',
+          '            EnvironmentFile=%h/.panom/backend-runtime/.env',
+          '            ExecStart=${NODE_BIN} %h/.panom/backend-runtime/generated_modules/panom-mesh/dist/cli/index.js run --all --config %h/.panom/backend-runtime/mesh.config.cjs',
+          '            ExecStop=${NODE_BIN} %h/.panom/backend-runtime/generated_modules/panom-mesh/dist/cli/index.js podman:stop --config %h/.panom/backend-runtime/mesh.config.cjs --force',
+          '            Restart=always',
+          '            RestartSec=5',
+          '            TimeoutStopSec=20',
       '',
       '            [Install]',
       '            WantedBy=default.target',
