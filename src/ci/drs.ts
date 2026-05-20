@@ -1,6 +1,5 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
 
 interface DrsPackageEntry {
   readonly to?: readonly string[]
@@ -27,9 +26,9 @@ interface DrsConfigFile {
 
 export interface DrsSourcePackagePlan {
   readonly name: string
-  readonly localPath: string
+  readonly sourcePath: string
+  readonly generatedPath: string
   readonly installSpecifier: string
-  readonly checkoutRepository: string
   readonly buildCommand?: string
 }
 
@@ -40,6 +39,9 @@ export interface DrsWorkflowPlan {
   readonly installCommand: string
   readonly sourcePackages: readonly DrsSourcePackagePlan[]
 }
+
+const GENERATED_MODULES_DIR = 'generated_modules'
+const COPY_EXCLUDES = new Set(['.git', 'node_modules', 'dist', '.turbo', '.next', '.DS_Store'])
 
 export function formatNpmInstallCommand(specifiers: readonly string[]): string {
   return specifiers.length > 0 ? `npm install ${specifiers.join(' ')}` : 'npm install'
@@ -77,24 +79,17 @@ export function getDrsWorkflowPlan(projectRoot: string, consumerCwd: string): Dr
       )
     }
 
-    const remoteUrl = readGitRemoteUrl(absoluteLocalPath)
-    const repository = parseGitHubRepository(remoteUrl)
-    const checkoutPath = path.relative(projectRoot, absoluteLocalPath) || '.'
-    const installSpecifier = `file:${path.relative(normalizedConsumerPath, absoluteLocalPath) || '.'}`
-
+    const generatedPath = resolveGeneratedModulePath(packageEntry.local.path)
     sourcePackages.push({
       name: packageName,
-      localPath: checkoutPath,
-      installSpecifier,
-      checkoutRepository: repository,
+      sourcePath: path.relative(projectRoot, absoluteLocalPath) || '.',
+      generatedPath,
+      installSpecifier: `file:./${generatedPath}`,
       buildCommand: packageEntry.local.build,
     })
   }
 
-  const allSpecifiers = [
-    ...installSpecifiers,
-    ...sourcePackages.map(pkg => pkg.installSpecifier),
-  ]
+  const allSpecifiers = [...installSpecifiers, ...sourcePackages.map(pkg => pkg.installSpecifier)]
 
   return {
     consumerPath: path.relative(projectRoot, normalizedConsumerPath) || '.',
@@ -102,6 +97,50 @@ export function getDrsWorkflowPlan(projectRoot: string, consumerCwd: string): Dr
     installSpecifiers: allSpecifiers,
     installCommand: formatNpmInstallCommand(allSpecifiers),
     sourcePackages,
+  }
+}
+
+export async function syncDrsGeneratedModules(projectRoot: string, consumerCwd: string): Promise<void> {
+  const plan = getDrsWorkflowPlan(projectRoot, consumerCwd)
+  const generatedRoot = path.join(consumerCwd, GENERATED_MODULES_DIR)
+
+  await fs.promises.rm(generatedRoot, { recursive: true, force: true })
+  await fs.promises.mkdir(generatedRoot, { recursive: true })
+
+  for (const sourcePackage of plan.sourcePackages) {
+    const absoluteSourcePath = path.resolve(projectRoot, sourcePackage.sourcePath)
+    const absoluteGeneratedPath = path.join(consumerCwd, sourcePackage.generatedPath)
+    await fs.promises.mkdir(path.dirname(absoluteGeneratedPath), { recursive: true })
+    await fs.promises.cp(absoluteSourcePath, absoluteGeneratedPath, {
+      recursive: true,
+      filter: source => {
+        const entryName = path.basename(source)
+        return !COPY_EXCLUDES.has(entryName) && !entryName.startsWith('._')
+      },
+    })
+    await pruneGeneratedNoise(absoluteGeneratedPath)
+  }
+}
+
+function resolveGeneratedModulePath(localPath: string): string {
+  const normalized = localPath.replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+$/, '')
+  if (normalized === '' || normalized === '.' || normalized.startsWith('../') || normalized.includes('/../')) {
+    throw new Error(`DRS local.path must stay inside the repository root: ${localPath}`)
+  }
+  return path.posix.join(GENERATED_MODULES_DIR, normalized)
+}
+
+async function pruneGeneratedNoise(dir: string): Promise<void> {
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    const target = path.join(dir, entry.name)
+    if (entry.name.startsWith('._') || entry.name === '.DS_Store') {
+      await fs.promises.rm(target, { recursive: true, force: true })
+      continue
+    }
+    if (entry.isDirectory()) {
+      await pruneGeneratedNoise(target)
+    }
   }
 }
 
@@ -139,30 +178,4 @@ function findConsumerEntry(
   }
 
   throw new Error(`No DRS consumer matches frontend directory: ${consumerCwd}.`)
-}
-
-function readGitRemoteUrl(repoDir: string): string {
-  try {
-    return execFileSync('git', ['-C', repoDir, 'remote', 'get-url', 'origin'], {
-      encoding: 'utf8',
-    }).trim()
-  } catch (error) {
-    throw new Error(`Unable to read git origin for only-source package at ${repoDir}.`)
-  }
-}
-
-function parseGitHubRepository(remoteUrl: string): string {
-  const patterns = [
-    /github\.com[:/](?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/,
-    /github\.com\/(?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/,
-  ]
-
-  for (const pattern of patterns) {
-    const match = remoteUrl.match(pattern)
-    if (match?.groups?.owner && match.groups.repo) {
-      return `${match.groups.owner}/${match.groups.repo}`
-    }
-  }
-
-  throw new Error(`Cannot derive a GitHub repository slug from remote URL: ${remoteUrl}`)
 }

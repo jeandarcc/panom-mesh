@@ -1,7 +1,6 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it, afterEach } from 'vitest'
 import { CiGenerateCommand } from '../src/ci/CiGenerateCommand.js'
 import { MeshConfigNormalizer } from '../src/config/MeshConfigNormalizer.js'
@@ -16,16 +15,20 @@ function makeTempRoot(): string {
   return dir
 }
 
-function initGitRepo(dir: string, remoteUrl: string): void {
-  fs.mkdirSync(dir, { recursive: true })
-  execFileSync('git', ['init', '-q'], { cwd: dir })
-  execFileSync('git', ['config', 'user.name', 'Codex'], { cwd: dir })
-  execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: dir })
-  execFileSync('git', ['remote', 'add', 'origin', remoteUrl], { cwd: dir })
-}
-
 function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
-  initGitRepo(path.join(root, 'panom-hsm-contract'), 'https://github.com/jeandarcc/Panom.git')
+  fs.mkdirSync(path.join(root, 'panom-hsm-contract', 'src'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'panom-hsm-contract', 'package.json'), JSON.stringify({
+    name: '@panomapp/hsm-panom-contract',
+    version: '3.0.0',
+    scripts: {
+      build: 'echo build',
+    },
+  }, null, 2))
+  fs.writeFileSync(path.join(root, 'panom-hsm-contract', 'package-lock.json'), JSON.stringify({
+    name: '@panomapp/hsm-panom-contract',
+    lockfileVersion: 3,
+  }, null, 2))
+  fs.writeFileSync(path.join(root, 'panom-hsm-contract', 'src', 'index.ts'), 'export const contract = true\n')
   fs.writeFileSync(
     path.join(root, 'drs.config.json'),
     JSON.stringify({
@@ -109,17 +112,16 @@ describe('Mesh CI generation', () => {
 
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
-    expect(output).toContain('Checkout Frontend')
-    expect(output).toContain('repository: jeandarcc/Panom')
     expect(output).toContain('Prepare @panomapp/hsm-panom-contract source')
-    expect(output).toContain('working-directory: panom-hsm-contract')
+    expect(output).toContain('working-directory: generated_modules/panom-hsm-contract')
     expect(output).toContain('npm ci')
     expect(output).toContain('npm run build')
     expect(output).toContain('Install DRS dependencies')
     expect(output).toContain(
-      'npm install @panomapp/hsm@^1.0.1 @panomapp/subdomain-policy@^0.1.0 @panomapp/bg-maker@^0.1.0 file:../panom-hsm-contract'
+      'npm install @panomapp/hsm@^1.0.1 @panomapp/subdomain-policy@^0.1.0 @panomapp/bg-maker@^0.1.0 file:./generated_modules/panom-hsm-contract'
     )
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
+    expect(fs.existsSync(path.join(root, 'panom-frontend', 'generated_modules', 'panom-hsm-contract', 'package.json'))).toBe(true)
   })
 
   it('uses DRS source packages in the backend workflow when ci.drs is enabled', async () => {
@@ -149,13 +151,14 @@ describe('Mesh CI generation', () => {
 
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
-    expect(output).toContain('Checkout Backend')
-    expect(output).toContain('path: panom-backend')
     expect(output).toContain('Prepare @panomapp/hsm-panom-contract source')
-    expect(output).toContain('working-directory: panom-hsm-contract')
+    expect(output).toContain('working-directory: generated_modules/panom-hsm-contract')
+    expect(output).toContain('Install DRS dependencies')
+    expect(output).toContain('npm install @panomapp/hsm@^1.0.1 file:./generated_modules/panom-hsm-contract')
     expect(output).toContain('docker build -t')
-    expect(output).toContain('-f panom-backend/Dockerfile .')
+    expect(output).toContain('-f Dockerfile .')
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
+    expect(fs.existsSync(path.join(root, 'panom-backend', 'generated_modules', 'panom-hsm-contract', 'package.json'))).toBe(true)
   })
 
   it('uses DRS source packages in the backend quadlet workflow when ci.drs is enabled', async () => {
@@ -188,12 +191,10 @@ describe('Mesh CI generation', () => {
 
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
-    expect(output).toContain('Checkout Backend')
-    expect(output).toContain('path: panom-backend')
     expect(output).toContain('Install DRS dependencies')
-    expect(output).toContain('working-directory: panom-backend')
+    expect(output).toContain('npm install @panomapp/hsm@^1.0.1 file:./generated_modules/panom-hsm-contract')
     expect(output).toContain('Generate Quadlet files')
-    expect(output).toContain('rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" panom-backend/.mesh/quadlet/')
+    expect(output).toContain('rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" .mesh/quadlet/')
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
   })
 
