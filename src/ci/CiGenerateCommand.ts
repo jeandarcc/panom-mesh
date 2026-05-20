@@ -22,6 +22,9 @@ interface ServiceGroup {
   readonly services: NormalizedMeshServiceConfig[]
 }
 
+const RUNTIME_BUNDLE_DIR = path.join('.mesh', 'runtime-bundle')
+const RUNTIME_BUNDLE_COPY_EXCLUDES = new Set(['.git', 'node_modules', 'dist', '.turbo', '.next', '.DS_Store'])
+
 export class CiGenerateCommand {
   public constructor(private readonly config: NormalizedMeshConfig) {}
 
@@ -31,6 +34,8 @@ export class CiGenerateCommand {
     if (this.config.ci.drs.enabled) {
       await this.syncGeneratedModules(options.service)
     }
+
+    await this.syncGeneratedRuntimeBundles(options.service)
 
     if (options.print) {
       return artifacts.map(a => `# ${a.repoDir}/.github/workflows/${a.name}\n${a.content.trim()}\n`).join('\n') + '\n'
@@ -64,6 +69,17 @@ export class CiGenerateCommand {
 
     for (const cwd of serviceCwds) {
       await syncDrsGeneratedModules(this.config.projectRoot, cwd)
+    }
+  }
+
+  private async syncGeneratedRuntimeBundles(onlyService?: string): Promise<void> {
+    if (this.config.ci.backend.strategy !== 'mesh') return
+
+    for (const group of this.groupByCwd(onlyService)) {
+      const apiSvc = group.services.find(service => service.type === 'backend')
+      if (!apiSvc) continue
+      const workerSvc = group.services.find(service => service.type === 'worker')
+      await this.syncBackendMeshRuntimeBundle(apiSvc, workerSvc)
     }
   }
 
@@ -258,7 +274,7 @@ export class CiGenerateCommand {
   }
 
   private frontendImageWorkflow(svc: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
-    const image = svc.podman.image ?? this.ghaCtx('github.repository_owner') + '/' + this.config.app + '-frontend:latest'
+    const image = svc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository_owner') + '/' + this.config.app + '-frontend:latest'
     const buildArgs = ci.frontend.buildArgs
     const buildArgEnvLines = buildArgs.map(k => '          ' + k + ': ' + this.ghaSecret(k)).join('\n')
     const buildArgEnvBlock = buildArgs.length > 0 ? '\n' + buildArgEnvLines : ''
@@ -372,11 +388,204 @@ export class CiGenerateCommand {
 
   // ─── Backend workflow ────────────────────────────────────────────────────
 
+  private async syncBackendMeshRuntimeBundle(
+    apiSvc: NormalizedMeshServiceConfig,
+    workerSvc: NormalizedMeshServiceConfig | undefined,
+  ): Promise<void> {
+    const runtimeBundleDir = path.join(apiSvc.cwd, RUNTIME_BUNDLE_DIR)
+    const generatedModulesDir = path.join(runtimeBundleDir, 'generated_modules')
+    const meshSourceDir = path.join(this.config.projectRoot, 'panom-mesh')
+    const generatedMeshDir = path.join(generatedModulesDir, 'panom-mesh')
+
+    if (!fs.existsSync(meshSourceDir)) {
+      throw new Error(`Mesh runtime source package is missing: ${meshSourceDir}`)
+    }
+
+    await fs.promises.rm(runtimeBundleDir, { recursive: true, force: true })
+    await ensureDir(generatedModulesDir)
+    await fs.promises.cp(meshSourceDir, generatedMeshDir, {
+      recursive: true,
+      filter: source => {
+        const entryName = path.basename(source)
+        return !RUNTIME_BUNDLE_COPY_EXCLUDES.has(entryName) && !entryName.startsWith('._')
+      },
+    })
+
+    await this.pruneGeneratedRuntimeNoise(generatedMeshDir)
+
+    await fs.promises.writeFile(
+      path.join(runtimeBundleDir, 'package.json'),
+      this.renderBackendRuntimePackageJson(),
+      'utf8',
+    )
+    await fs.promises.writeFile(
+      path.join(runtimeBundleDir, 'mesh.config.cjs'),
+      this.renderBackendRuntimeMeshConfig(apiSvc, workerSvc),
+      'utf8',
+    )
+  }
+
+  private async pruneGeneratedRuntimeNoise(dir: string): Promise<void> {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const target = path.join(dir, entry.name)
+      if (entry.name.startsWith('._') || entry.name === '.DS_Store') {
+        await fs.promises.rm(target, { recursive: true, force: true })
+        continue
+      }
+      if (entry.isDirectory()) {
+        await this.pruneGeneratedRuntimeNoise(target)
+      }
+    }
+  }
+
+  private renderBackendRuntimePackageJson(): string {
+    return `${JSON.stringify({
+      name: `${this.config.app}-backend-mesh-runtime`,
+      private: true,
+      type: 'module',
+      scripts: {
+        'mesh:start': 'mesh run --all --config ./mesh.config.cjs',
+        'mesh:stop': 'mesh podman:stop --config ./mesh.config.cjs --force',
+      },
+      dependencies: {
+        '@panomapp/mesh': 'file:./generated_modules/panom-mesh',
+      },
+    }, null, 2)}\n`
+  }
+
+  private renderBackendRuntimeMeshConfig(
+    apiSvc: NormalizedMeshServiceConfig,
+    workerSvc: NormalizedMeshServiceConfig | undefined,
+  ): string {
+    const envKeys = JSON.stringify(this.config.ci.backend.envSecrets, null, 2)
+    const backendImageFallback = apiSvc.podman.image ?? 'ghcr.io/' + this.config.app + '/panom-backend:latest'
+    const firstApiPort = this.config.runtime.portRange.from
+    const portRange = JSON.stringify(apiSvc.portRange)
+    const apiRoutes = JSON.stringify(apiSvc.routes)
+    const apiStrategy = JSON.stringify(apiSvc.strategy)
+    const meshSecret = JSON.stringify(this.config.router.secret)
+    const network = JSON.stringify(this.config.runtime.podman.network)
+    const containerPrefix = JSON.stringify(this.config.runtime.podman.containerPrefix)
+    const publishHost = JSON.stringify(this.config.runtime.podman.publishHost)
+    const apiInstances = JSON.stringify(apiSvc.instances)
+    const shutdownTimeoutMs = JSON.stringify(this.config.runtime.shutdownTimeoutMs)
+    const drainTimeoutMs = JSON.stringify(this.config.runtime.drainTimeoutMs)
+    const logsDir = JSON.stringify('.state/logs')
+    const stateDir = JSON.stringify('.state')
+    const workerBlock = workerSvc ? `
+    worker: {
+      type: 'worker',
+      command: 'npm run worker',
+      cwd: '.',
+      instances: 1,
+      watch: false,
+      env: runtimeEnv(backendEnvKeys, {
+        NODE_ENV: 'production',
+        PANOM_ENABLE_BACKGROUND_JOBS: 'true',
+      }),
+      podman: {
+        image: backendImage,
+        command: ['node', 'dist/worker.js'],
+      },
+    },` : ''
+
+    return `const { defineMeshConfig } = require('@panomapp/mesh')
+
+const backendEnvKeys = ${envKeys}
+const backendImage = process.env.PANOM_BACKEND_IMAGE?.trim() || ${JSON.stringify(backendImageFallback)}
+
+function runtimeEnv(keys, extras = {}) {
+  const env = { ...extras }
+  for (const key of keys) {
+    const value = process.env[key]
+    if (value !== undefined && value !== '') env[key] = value
+  }
+  return env
+}
+
+module.exports = defineMeshConfig({
+  app: ${JSON.stringify(this.config.app)},
+
+  router: {
+    enabled: true,
+    host: '127.0.0.1',
+    port: 8080,
+    sessionAffinity: true,
+    secureCookies: true,
+    secret: process.env.MESH_SECRET ?? ${meshSecret},
+  },
+
+  runtime: {
+    mode: 'podman',
+    stateDir: ${stateDir},
+    logsDir: ${logsDir},
+    defaultWatch: false,
+    portRange: ${portRange},
+    drainTimeoutMs: ${drainTimeoutMs},
+    shutdownTimeoutMs: ${shutdownTimeoutMs},
+    podman: {
+      network: ${network},
+      containerPrefix: ${containerPrefix},
+      publishHost: ${publishHost},
+      replace: true,
+      pull: 'always',
+      redis: {
+        enabled: false,
+      },
+    },
+  },
+
+  registry: {
+    type: 'file',
+  },
+
+  streaming: {
+    enabled: false,
+  },
+
+  coordination: {
+    enabled: true,
+    backend: 'memory',
+    cleanup: {
+      enabled: true,
+    },
+  },
+
+  services: {
+    api: {
+      type: 'backend',
+      command: 'npm run start',
+      cwd: '.',
+      instances: ${apiInstances},
+      port: ${JSON.stringify(firstApiPort)},
+      route: ${apiRoutes},
+      healthPath: '/health',
+      strategy: ${apiStrategy},
+      watch: false,
+      env: runtimeEnv(backendEnvKeys, {
+        NODE_ENV: 'production',
+        PANOM_ENABLE_BACKGROUND_JOBS: 'false',
+      }),
+      podman: {
+        image: backendImage,
+        containerPort: 8080,
+      },
+    },${workerBlock}
+  },
+})
+`
+  }
+
   private backendWorkflow(
     apiSvc: NormalizedMeshServiceConfig,
     workerSvc: NormalizedMeshServiceConfig | undefined,
     ci: NormalizedMeshCiConfig
   ): string {
+    if (ci.backend.strategy === 'mesh') {
+      return this.backendMeshWorkflow(apiSvc, workerSvc, ci)
+    }
+
     return ci.backend.strategy === 'quadlet'
       ? this.backendQuadletWorkflow(apiSvc, workerSvc, ci)
       : this.backendPodmanWorkflow(apiSvc, workerSvc, ci)
@@ -387,7 +596,7 @@ export class CiGenerateCommand {
     workerSvc: NormalizedMeshServiceConfig | undefined,
     ci: NormalizedMeshCiConfig
   ): string {
-    const image = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository') + ':latest'
+    const image = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository_owner') + '/' + this.config.app + '-backend:latest'
     const secrets = ci.backend.envSecrets
     const hasWorker = workerSvc !== undefined
     const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
@@ -627,6 +836,212 @@ export class CiGenerateCommand {
       '          fi',
       '',
       '          echo "[deploy] Backend is UP and healthy."',
+      '          EOF',
+      '',
+    ].join('\n')
+  }
+
+  private backendMeshWorkflow(
+    apiSvc: NormalizedMeshServiceConfig,
+    workerSvc: NormalizedMeshServiceConfig | undefined,
+    ci: NormalizedMeshCiConfig,
+  ): string {
+    const backendImage = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository_owner') + '/' + this.config.app + '-backend:latest'
+    const secrets = ci.backend.envSecrets
+    const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
+    const runtimeBundlePath = `${RUNTIME_BUNDLE_DIR}/`
+    const fixedKeys = new Set(['NODE_ENV', 'PORT', 'MESH_RUNTIME_MODE', 'PANOM_BACKEND_IMAGE', 'MESH_SECRET'])
+    const envSecretsLines = secrets.map(key => '          ' + key + ': ' + this.ghaSecret(key)).join('\n')
+    const envContentLines = secrets
+      .filter(key => !fixedKeys.has(key))
+      .map(key => '          ' + key + '=${' + key + '}')
+      .join('\n')
+
+    const checkoutSteps = [
+      '      - name: Checkout',
+      '        uses: actions/checkout@v4',
+      '',
+      ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
+      '      - name: Prepare @panomapp/mesh runtime source',
+      '        working-directory: .mesh/runtime-bundle/generated_modules/panom-mesh',
+      '        run: |',
+      '          npm install',
+      '          npm run build',
+      '',
+    ]
+
+    const setupNodeStep = [
+      '      - name: Setup Node',
+      '        uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version: 20',
+      '          cache: npm',
+      ...(ci.drs.enabled ? ['          cache-dependency-path: package-lock.json'] : []),
+      '',
+    ]
+
+    const installStep = ci.drs.enabled
+      ? [
+        '      - name: Install DRS dependencies',
+        '        run: |',
+        '          ' + plan!.installCommand,
+        '',
+      ]
+      : [
+        '      - name: Install dependencies',
+        '        run: npm ci',
+        '',
+      ]
+
+    const runtimeEnvLines = [
+      '          ENV_CONTENT="NODE_ENV=production',
+      '          MESH_RUNTIME_MODE=podman',
+      '          PANOM_BACKEND_IMAGE=$BACKEND_IMAGE',
+      '          MESH_SECRET=$MESH_SECRET',
+      envContentLines + '"',
+    ]
+
+    return [
+      'name: Deploy',
+      '',
+      'on:',
+      '  push:',
+      '    branches:',
+      '      - ' + ci.branch,
+      '',
+      'concurrency:',
+      '  group: deploy-backend',
+      '  cancel-in-progress: false',
+      '',
+      'jobs:',
+      '  deploy:',
+      '    runs-on: ubuntu-latest',
+      '',
+      '    permissions:',
+      '      contents: read',
+      '      packages: write',
+      '',
+      '    env:',
+      '      BACKEND_IMAGE: ' + backendImage,
+      '',
+      '    steps:',
+      ...checkoutSteps,
+      ...setupNodeStep,
+      ...installStep,
+      '      - name: Login GHCR',
+      '        env:',
+      '          GHCR_TOKEN: ' + this.ghaSecret('GITHUB_TOKEN'),
+      '          GHCR_USER: ' + this.ghaCtx('github.actor'),
+      '        run: |',
+      '          for attempt in 1 2 3 4 5; do',
+      '            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin && exit 0',
+      '            echo "GHCR login failed, retrying (${attempt}/5)..."',
+      '            sleep $((attempt * 2))',
+      '          done',
+      '          exit 1',
+      '',
+      '      - name: Build backend image',
+      '        run: docker build -t "$BACKEND_IMAGE" -f Dockerfile .',
+      '',
+      '      - name: Push backend image',
+      '        run: docker push "$BACKEND_IMAGE"',
+      '',
+      '      - name: Setup SSH',
+      '        env:',
+      '          DEPLOY_SSH_KEY: ' + this.ghaSecret('DEPLOY_SSH_KEY'),
+      '          DEPLOY_HOST: ' + this.ghaSecret('DEPLOY_HOST'),
+      '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
+      '        run: |',
+      '          mkdir -p ~/.ssh',
+      '          echo "$DEPLOY_SSH_KEY" > ~/.ssh/id_rsa',
+      '          chmod 600 ~/.ssh/id_rsa',
+      '          ssh-keyscan -p "${DEPLOY_PORT:-22}" "$DEPLOY_HOST" >> ~/.ssh/known_hosts',
+      '',
+      '      - name: Upload backend mesh runtime bundle',
+      '        env:',
+      '          DEPLOY_HOST: ' + this.ghaSecret('DEPLOY_HOST'),
+      '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
+      '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
+      '        run: |',
+      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" \'mkdir -p ~/.panom/backend-runtime\'',
+      '          rsync -az --delete --exclude "node_modules" -e "ssh -p ${DEPLOY_PORT:-22}" ' + runtimeBundlePath + ' "${DEPLOY_USER}@${DEPLOY_HOST}:~/.panom/backend-runtime/"',
+      '',
+      '      - name: Write backend mesh environment on server',
+      '        env:',
+      '          DEPLOY_HOST: ' + this.ghaSecret('DEPLOY_HOST'),
+      '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
+      '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
+      '          MESH_SECRET: ' + this.ghaSecret('MESH_SECRET'),
+      '          BACKEND_IMAGE: ' + this.ghaEnv('BACKEND_IMAGE'),
+      envSecretsLines,
+      '        run: |',
+      ...runtimeEnvLines,
+      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" \'install -d -m 700 ~/.panom/backend-runtime\'',
+      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" \'install -m 600 /dev/null ~/.panom/backend-runtime/.env\'',
+      '          printf \'%s\\n\' "$ENV_CONTENT" | ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" \'cat > ~/.panom/backend-runtime/.env\'',
+      '',
+      '      - name: Restart backend under Mesh on server',
+      '        env:',
+      '          DEPLOY_HOST: ' + this.ghaSecret('DEPLOY_HOST'),
+      '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
+      '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
+      '        run: |',
+      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<\'EOF\'',
+      '            set -euo pipefail',
+      '            APP_DIR="$HOME/.panom/backend-runtime"',
+      '            SERVICE_FILE="$HOME/.config/systemd/user/panom-backend-mesh.service"',
+      '',
+      '            mkdir -p "$HOME/.config/systemd/user"',
+      '            cd "$APP_DIR"',
+      '            npm install',
+      '',
+      '            cat > "$SERVICE_FILE" <<\'UNIT\'',
+      '            [Unit]',
+      '            Description=Panom backend mesh runtime',
+      '            After=network-online.target',
+      '            Wants=network-online.target',
+      '',
+      '            [Service]',
+      '            WorkingDirectory=%h/.panom/backend-runtime',
+      '            EnvironmentFile=%h/.panom/backend-runtime/.env',
+      '            ExecStart=/usr/bin/env bash -lc "npm run mesh:start"',
+      '            Restart=always',
+      '            RestartSec=5',
+      '            TimeoutStopSec=20',
+      '',
+      '            [Install]',
+      '            WantedBy=default.target',
+      '            UNIT',
+      '',
+      '            systemctl --user stop panom-backend-mesh.service >/dev/null 2>&1 || true',
+      '            podman stop panom >/dev/null 2>&1 || true',
+      '            podman stop panom-worker >/dev/null 2>&1 || true',
+      '            podman rm -f panom >/dev/null 2>&1 || true',
+      '            podman rm -f panom-worker >/dev/null 2>&1 || true',
+      '            podman ps -a --format \'{{.Names}}\' | grep \'^panom-\' | xargs -r podman rm -f || true',
+      '',
+      '            systemctl --user daemon-reload',
+      '            systemctl --user enable panom-backend-mesh.service >/dev/null 2>&1 || true',
+      '            systemctl --user restart panom-backend-mesh.service',
+      '',
+      '            healthy=0',
+      '            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
+      '              if curl -fsS --max-time 5 http://127.0.0.1:8080/health >/dev/null; then',
+      '                healthy=1',
+      '                break',
+      '              fi',
+      '              sleep 3',
+      '            done',
+      '',
+      '            if [ "$healthy" -ne 1 ]; then',
+      '              echo "[deploy] Backend mesh service failed health check."',
+      '              systemctl --user --no-pager --full status panom-backend-mesh.service || true',
+      '              journalctl --user -u panom-backend-mesh.service -n 200 --no-pager || true',
+      '              podman ps -a || true',
+      '              exit 1',
+      '            fi',
+      '',
+      '            systemctl --user --no-pager --full status panom-backend-mesh.service',
       '          EOF',
       '',
     ].join('\n')

@@ -54,6 +54,14 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
     },
   })
 
+  writeLocalPackage(root, 'panom-mesh', {
+    name: '@panomapp/mesh',
+    version: '1.0.0',
+    scripts: {
+      build: 'echo build',
+    },
+  })
+
   fs.writeFileSync(
     path.join(root, 'drs.config.json'),
     JSON.stringify({
@@ -253,6 +261,70 @@ describe('Mesh CI generation', () => {
     expect(output).toContain('rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" .mesh/quadlet/')
     expect(output).not.toContain('@panomapp/hsm@^1.0.1')
     expect(output).not.toContain('@panomapp/hsm-panom-contract@3.0.0')
+  })
+
+  it('generates a mesh-managed backend workflow and runtime bundle when ci.backend.strategy is mesh', async () => {
+    const root = makeTempRoot()
+    writeDrsConfig(root)
+
+    const config = normalizer.normalize(
+      defineMeshConfig({
+        app: 'panom',
+        ci: {
+          drs: {
+            enabled: true,
+          },
+          backend: {
+            strategy: 'mesh',
+          },
+        },
+        runtime: {
+          portRange: { from: 31_000, to: 31_999 },
+          podman: {
+            network: 'panom-mesh',
+            containerPrefix: 'panom',
+            publishHost: '127.0.0.1',
+          },
+        },
+        router: {
+          secret: 'mesh-secret',
+        },
+        services: {
+          api: {
+            type: 'backend',
+            command: 'npm run dev',
+            cwd: './panom-backend',
+            route: ['/api', '/socket.io', '/health'],
+            strategy: 'session-affinity',
+            instances: 2,
+            healthPath: '/health',
+          },
+          worker: {
+            type: 'worker',
+            command: 'npm run worker',
+            cwd: './panom-backend',
+            instances: 1,
+          },
+        },
+      }),
+      root,
+      path.join(root, 'mesh.config.ts')
+    )
+
+    const output = await new CiGenerateCommand(config).generate({ print: true })
+
+    expect(output).toContain('Prepare @panomapp/mesh runtime source')
+    expect(output).toContain('panom-backend-mesh.service')
+    expect(output).toContain('npm run mesh:start')
+    expect(output).toContain('Upload backend mesh runtime bundle')
+    expect(output).toContain('http://127.0.0.1:8080/health')
+    expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'mesh.config.cjs'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'generated_modules', 'panom-mesh', 'package.json'))).toBe(true)
+    const runtimeConfig = fs.readFileSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'mesh.config.cjs'), 'utf8')
+    expect(runtimeConfig).toContain("port: 31000")
+    expect(runtimeConfig).toContain("instances: 2")
+    expect(runtimeConfig).toContain('/socket.io')
   })
 
   it('keeps npm ci when ci.drs is disabled', async () => {

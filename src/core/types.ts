@@ -487,7 +487,7 @@ export interface MeshHsmPlanOptions {
 // ── CI workflow generation ──────────────────────────────────────────────────
 
 export type MeshCiFrontendStrategy = 'rsync' | 'image'
-export type MeshCiBackendStrategy = 'podman' | 'quadlet'
+export type MeshCiBackendStrategy = 'podman' | 'quadlet' | 'mesh'
 
 /**
  * CI configuration for the frontend service.
@@ -510,6 +510,8 @@ export interface MeshCiFrontendConfig {
  *   podman stop/rm/pull/run + health-check.
  * `strategy: 'quadlet'` — same image push, then mesh quadlet generate +
  *   systemd unit reload via SSH.
+ * `strategy: 'mesh'` — same image push, then upload a generated mesh runtime
+ *   bundle and keep the backend alive under a long-lived mesh process.
  *
  * `envSecrets` lists the env-var names to pull from GitHub Actions secrets
  * and write to the server's `.panom.env` file.  Defaults to every key found
