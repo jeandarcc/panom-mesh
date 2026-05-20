@@ -10,6 +10,7 @@ import { PodmanCommandBuilder, type PodmanContainerSpec } from './PodmanCommandB
 import { PodmanPlan } from './PodmanPlan.js'
 import { PodmanRunner } from './PodmanRunner.js'
 import { MeshIdFactory } from '../ids/MeshIdFactory.js'
+import { ProcessTakeover } from '../process/ProcessTakeover.js'
 
 interface ManagedPodmanContainer {
   readonly spec: PodmanContainerSpec
@@ -30,6 +31,7 @@ export class PodmanSupervisor {
   private readonly runner: PodmanRunner
   private readonly plan: PodmanPlan
   private readonly ids = new MeshIdFactory()
+  private readonly takeover = new ProcessTakeover()
   private readonly containers = new Map<string, ManagedPodmanContainer>()
   private readonly routers = new Map<string, ManagedRouterProcess>()
   private stopping = false
@@ -126,6 +128,7 @@ export class PodmanSupervisor {
     const id = this.ids.createInstanceId('router')
     const resolvedCliPath = cliPath ?? process.argv[1]
     if (!resolvedCliPath) throw new Error('Cannot start mesh router automatically without a CLI path.')
+    await this.takeover.forceFreePort(this.config.router.port, { label: `router port ${this.config.router.port}` })
     const logFile = this.logStore.getLogPath(id)
     const logStream = await this.logStore.createStream(id)
     const command = [process.execPath, resolvedCliPath, 'router', '--config', this.config.configPath]

@@ -4,6 +4,7 @@ import { MeshIdFactory } from '../ids/MeshIdFactory.js'
 import { LogStore } from '../logs/LogStore.js'
 import { nowIso } from '../utils/time.js'
 import { PortAllocator } from './PortAllocator.js'
+import { ProcessTakeover } from './ProcessTakeover.js'
 import type { MeshStreamPublisher } from '../streaming/types.js'
 
 export interface SpawnedMeshInstance {
@@ -14,6 +15,7 @@ export interface SpawnedMeshInstance {
 export class ProcessInstanceSpawner {
   private readonly ids = new MeshIdFactory()
   private readonly ports = new PortAllocator()
+  private readonly takeover = new ProcessTakeover()
 
   public constructor(
     private readonly config: NormalizedMeshConfig,
@@ -23,6 +25,9 @@ export class ProcessInstanceSpawner {
 
   public async spawn(service: NormalizedMeshServiceConfig, index: number): Promise<SpawnedMeshInstance> {
     const id = this.ids.createInstanceId(service.name)
+    if (service.type !== 'worker' && service.port !== undefined) {
+      await this.takeover.forceFreePort(service.port, { label: `${service.name} preferred port ${service.port}` })
+    }
     const port = service.type === 'worker'
       ? null
       : await this.ports.reservePreferred(index === 0 ? service.port : undefined, service.portRange)

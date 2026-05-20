@@ -22,13 +22,18 @@ export class PortAllocator {
   }
 
   private async isAvailable(port: number): Promise<boolean> {
+    return await this.canBind(port, '::') && await this.canBind(port, '0.0.0.0')
+  }
+
+  private async canBind(port: number, host: string): Promise<boolean> {
     return new Promise(resolve => {
       const server = net.createServer()
+      server.unref()
       server.once('error', () => resolve(false))
       server.once('listening', () => {
         server.close(() => resolve(true))
       })
-      server.listen(port, '127.0.0.1')
+      server.listen({ port, host, exclusive: true })
     })
   }
 }

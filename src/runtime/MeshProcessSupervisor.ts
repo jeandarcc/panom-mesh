@@ -5,6 +5,7 @@ import type { MeshRunOptions, NormalizedMeshConfig, MeshInstanceRecord } from '.
 import { LogStore } from '../logs/LogStore.js'
 import { nowIso } from '../utils/time.js'
 import { ProcessInstanceSpawner } from '../process/ProcessInstanceSpawner.js'
+import { ProcessTakeover } from '../process/ProcessTakeover.js'
 import { MeshIdFactory } from '../ids/MeshIdFactory.js'
 import { RegistryFactory } from '../registry/RegistryFactory.js'
 import { HeartbeatLoop } from '../registry/HeartbeatLoop.js'
@@ -26,6 +27,7 @@ export class MeshProcessSupervisor {
   private readonly children = new Map<string, ManagedChild>()
   private readonly ids = new MeshIdFactory()
   private readonly streamPublisher: MeshStreamPublisher | null
+  private readonly takeover = new ProcessTakeover()
   private stopping = false
 
   public constructor(private readonly config: NormalizedMeshConfig) {
@@ -37,6 +39,7 @@ export class MeshProcessSupervisor {
 
   public async run(options: MeshRunOptions = {}): Promise<void> {
     const services = this.selectServices(options)
+    await this.reconcilePreexistingInstances(services, options)
     for (const service of services) {
       const count = options.instances ?? service.instances
       for (let index = 0; index < count; index += 1) {
@@ -82,12 +85,37 @@ export class MeshProcessSupervisor {
     return services.some(service => service.routes.length > 0)
   }
 
+  private async reconcilePreexistingInstances(
+    services: readonly { name: string; port?: number; routes: readonly string[] }[],
+    options: MeshRunOptions
+  ): Promise<void> {
+    const existing = await this.registry.list({ includeExpired: true })
+    const serviceNames = new Set(services.map(service => service.name))
+    const shouldStartRouter = this.shouldStartRouter(options, services)
+
+    for (const instance of existing) {
+      const shouldReconcile = instance.service === 'router'
+        ? shouldStartRouter
+        : serviceNames.has(instance.service)
+      if (!shouldReconcile) continue
+
+      if (instance.pid && this.isAlive(instance.pid)) {
+        await this.takeover.killPid(instance.pid, { label: `${instance.service} instance ${instance.id}` })
+      }
+      if (instance.port !== null) {
+        await this.takeover.forceFreePort(instance.port, { label: `${instance.service} instance ${instance.id} port ${instance.port}` })
+      }
+      await this.registry.unregister(instance.id).catch(() => undefined)
+    }
+  }
+
   private async spawnRouter(cliPath?: string): Promise<{ record: MeshInstanceRecord; child: ChildProcess }> {
     const id = this.ids.createInstanceId('router')
     const resolvedCliPath = cliPath ?? process.argv[1]
     if (!resolvedCliPath) {
       throw new Error('Cannot start mesh router automatically without a CLI path. Use the mesh CLI or run MeshRouterServer directly.')
     }
+    await this.takeover.forceFreePort(this.config.router.port, { label: `router port ${this.config.router.port}` })
     const logFile = this.logStore.getLogPath(id)
     const logStream = await this.logStore.createStream(id)
     const command = [process.execPath, resolvedCliPath, 'router', '--config', this.config.configPath]
@@ -209,6 +237,15 @@ export class MeshProcessSupervisor {
 
   private hasExited(child: ChildProcess): boolean {
     return child.exitCode !== null || child.signalCode !== null
+  }
+
+  private isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
   }
 
   private async waitForChildren(children: readonly ManagedChild[], timeoutMs: number): Promise<boolean> {
