@@ -157,6 +157,8 @@ export interface MeshPodmanQuadletConfig {
   readonly outputDir?: string
   readonly user?: boolean
   readonly installCommand?: boolean
+  readonly configSourceDir?: string
+  readonly configTargetDir?: string
 }
 
 export interface MeshPodmanRuntimeConfig {

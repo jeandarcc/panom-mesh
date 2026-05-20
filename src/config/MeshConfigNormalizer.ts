@@ -134,7 +134,9 @@ export class MeshConfigNormalizer {
       quadlet: {
         outputDir: path.resolve(projectRoot, podman?.quadlet?.outputDir ?? '.mesh/quadlet'),
         user: podman?.quadlet?.user ?? true,
-        installCommand: podman?.quadlet?.installCommand ?? true
+        installCommand: podman?.quadlet?.installCommand ?? true,
+        configSourceDir: path.resolve(projectRoot, podman?.quadlet?.configSourceDir ?? '.mesh/runtime-bundle'),
+        configTargetDir: podman?.quadlet?.configTargetDir ?? '/workspace'
       },
       redis: {
         enabled: podman?.redis?.enabled ?? false,

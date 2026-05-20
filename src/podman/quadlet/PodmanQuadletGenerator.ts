@@ -1,3 +1,4 @@
+import path from 'node:path'
 import type { NormalizedMeshConfig } from '../../core/types.js'
 import { PodmanPlan } from '../PodmanPlan.js'
 
@@ -89,7 +90,7 @@ export class PodmanQuadletGenerator {
 
   private routerFile(): QuadletFile {
     const podman = this.config.runtime.podman
-    const configMount = `${this.config.projectRoot}:/workspace:ro`
+    const configMount = `${podman.quadlet.configSourceDir}:${podman.quadlet.configTargetDir}:ro`
     const lines = [
       '[Unit]',
       `Description=${this.config.app} mesh router`,
@@ -100,13 +101,13 @@ export class PodmanQuadletGenerator {
       `Network=${podman.network}`,
       `PublishPort=${podman.publishHost}:${this.config.router.port}:${podman.routerContainerPort}`,
       `Volume=${configMount}`,
-      'WorkingDir=/workspace',
+      `WorkingDir=${podman.quadlet.configTargetDir}`,
       `Environment=MESH_APP=${this.config.app}`,
       `Environment=MESH_REGISTRY_TYPE=${this.config.registry.type}`,
       `Environment=MESH_REGISTRY_URL=${this.config.registry.url}`,
       `Environment=PORT=${podman.routerContainerPort}`,
       `Environment=MESH_PORT=${podman.routerContainerPort}`,
-      `Exec=mesh router --config /workspace/${this.relativeConfigPath()}`,
+      `Exec=mesh router --config ${this.routerConfigPath()}`,
       '',
       '[Service]',
       'Restart=always',
@@ -133,11 +134,13 @@ export class PodmanQuadletGenerator {
     }
   }
 
-  private relativeConfigPath(): string {
-    if (this.config.configPath.startsWith(this.config.projectRoot)) {
-      return this.config.configPath.slice(this.config.projectRoot.length).replace(/^\/+/, '')
-    }
-    return this.config.configPath
+  private routerConfigPath(): string {
+    const sourceDir = this.config.runtime.podman.quadlet.configSourceDir
+    const targetDir = this.config.runtime.podman.quadlet.configTargetDir
+    const relative = this.config.configPath.startsWith(sourceDir)
+      ? path.relative(sourceDir, this.config.configPath)
+      : path.basename(this.config.configPath)
+    return path.posix.join(targetDir, relative.split(path.sep).join(path.posix.sep))
   }
 
   private escape(value: string): string {
