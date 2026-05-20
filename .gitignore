@@ -28,6 +28,8 @@ mesh.pid
 *.log
 logs/
 pids/
+!src/logs/
+!src/logs/**
 
 # Package artifacts
 *.tgz
