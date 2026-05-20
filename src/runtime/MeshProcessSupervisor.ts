@@ -99,11 +99,18 @@ export class MeshProcessSupervisor {
         : serviceNames.has(instance.service)
       if (!shouldReconcile) continue
 
-      if (instance.pid && this.isAlive(instance.pid)) {
-        await this.takeover.killPid(instance.pid, { label: `${instance.service} instance ${instance.id}` })
-      }
+      let portReleased = instance.port === null
       if (instance.port !== null) {
         await this.takeover.forceFreePort(instance.port, { label: `${instance.service} instance ${instance.id} port ${instance.port}` })
+        portReleased = true
+      }
+      if (instance.pid && this.isAlive(instance.pid) && !portReleased) {
+        const canProveOwnership = await this.canSafelyTerminateInstancePid(instance)
+        if (canProveOwnership) {
+          await this.takeover.killPid(instance.pid, { label: `${instance.service} instance ${instance.id}` })
+        } else {
+          console.warn(`[mesh] skipping stale pid cleanup for ${instance.id}; process is alive but no longer provably owned by mesh`)
+        }
       }
       await this.registry.unregister(instance.id).catch(() => undefined)
     }
@@ -246,6 +253,15 @@ export class MeshProcessSupervisor {
     } catch {
       return false
     }
+  }
+
+  private async canSafelyTerminateInstancePid(instance: MeshInstanceRecord): Promise<boolean> {
+    if (!instance.pid) return false
+    if (instance.port !== null) {
+      const ownsPort = await this.takeover.pidOwnsListeningPort(instance.pid, instance.port)
+      if (ownsPort) return true
+    }
+    return await this.takeover.processMatchesRecord(instance.pid, instance)
   }
 
   private async waitForChildren(children: readonly ManagedChild[], timeoutMs: number): Promise<boolean> {

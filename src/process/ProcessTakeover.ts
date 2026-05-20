@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import net from 'node:net'
 import { promisify } from 'node:util'
+import type { MeshInstanceRecord } from '../core/types.js'
 import { sleep } from '../utils/time.js'
 
 const execFileAsync = promisify(execFile)
@@ -51,11 +52,13 @@ export class ProcessTakeover {
     const timeoutMs = options.timeoutMs ?? 2_500
     const deadline = Date.now() + timeoutMs
     const label = options.label ?? `pid ${pid}`
+    let warned = false
 
     while (Date.now() < deadline) {
       if (!this.isAlive(pid)) return
-      if (!options.quiet) {
+      if (!options.quiet && !warned) {
         console.warn(`[mesh] terminating ${label}`)
+        warned = true
       }
       try {
         process.kill(pid, 'SIGTERM')
@@ -77,12 +80,59 @@ export class ProcessTakeover {
     }
   }
 
+  public async pidOwnsListeningPort(pid: number, port: number): Promise<boolean> {
+    const listeners = await this.listListeningPids(port)
+    return listeners.includes(pid)
+  }
+
+  public async processMatchesRecord(pid: number, record: Pick<MeshInstanceRecord, 'command' | 'cwd'>): Promise<boolean> {
+    const commandLine = await this.readCommandLine(pid)
+    if (!commandLine) return false
+
+    const expectedTokens = record.command
+      .map(token => token.trim())
+      .filter(Boolean)
+      .filter(token => !token.startsWith('--'))
+      .slice(0, 3)
+
+    if (expectedTokens.length > 0 && !expectedTokens.every(token => commandLine.includes(token))) {
+      return false
+    }
+
+    if (record.cwd) {
+      const cwd = await this.readWorkingDirectory(pid)
+      if (cwd && cwd !== record.cwd) return false
+    }
+
+    return true
+  }
+
   public async listListeningPids(port: number): Promise<number[]> {
     try {
       const { stdout } = await execFileAsync('lsof', ['-nP', '-tiTCP:' + String(port), '-sTCP:LISTEN'])
       return Array.from(new Set(stdout.split(/\s+/).map(value => Number(value.trim())).filter(value => Number.isInteger(value) && value > 0)))
     } catch {
       return []
+    }
+  }
+
+  private async readCommandLine(pid: number): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'command='])
+      const value = stdout.trim()
+      return value.length > 0 ? value : null
+    } catch {
+      return null
+    }
+  }
+
+  private async readWorkingDirectory(pid: number): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'])
+      const line = stdout.split('\n').find(entry => entry.startsWith('n'))
+      return line ? line.slice(1) : null
+    } catch {
+      return null
     }
   }
 
