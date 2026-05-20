@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../utils/fs.js'
-import { formatNpmInstallCommand, getDrsRegistryInstallSpecifiers } from './drs.js'
+import { getDrsWorkflowPlan } from './drs.js'
 import type {
   NormalizedMeshConfig,
   NormalizedMeshServiceConfig,
@@ -101,21 +101,90 @@ export class CiGenerateCommand {
       : this.frontendRsyncWorkflow(svc, ci)
   }
 
-  private frontendInstallCommand(svc: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
-    if (!ci.drs.enabled) {
+  private frontendRepoPath(svc: NormalizedMeshServiceConfig): string {
+    return path.relative(this.config.projectRoot, svc.cwd) || '.'
+  }
+
+  private frontendDrsPlan(svc: NormalizedMeshServiceConfig) {
+    return getDrsWorkflowPlan(this.config.projectRoot, svc.cwd)
+  }
+
+  private frontendDrsBootstrapSteps(plan: ReturnType<typeof getDrsWorkflowPlan>): string[] {
+    const steps: string[] = []
+
+    for (const sourcePackage of plan.sourcePackages) {
+      steps.push(
+        '      - name: Checkout ' + sourcePackage.name + ' source',
+        '        uses: actions/checkout@v4',
+        '        with:',
+        '          repository: ' + sourcePackage.checkoutRepository,
+        '          path: ' + sourcePackage.localPath,
+        '',
+        '      - name: Prepare ' + sourcePackage.name + ' source',
+        '        working-directory: ' + sourcePackage.localPath,
+        '        run: |',
+        '          npm ci',
+        '          ' + (sourcePackage.buildCommand ?? 'npm run build'),
+        '',
+      )
+    }
+
+    return steps
+  }
+
+  private frontendInstallCommand(ci: NormalizedMeshCiConfig, plan?: ReturnType<typeof getDrsWorkflowPlan>): string {
+    if (!ci.drs.enabled || !plan) {
       return 'npm ci'
     }
 
-    const specifiers = getDrsRegistryInstallSpecifiers(this.config.projectRoot, svc.cwd)
-    return formatNpmInstallCommand(specifiers)
+    return plan.installCommand
+  }
+
+  private frontendWorkingDirectory(svc: NormalizedMeshServiceConfig): string {
+    return this.frontendRepoPath(svc)
   }
 
   private frontendRsyncWorkflow(svc: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
     const buildArgs = ci.frontend.buildArgs
     const buildEnvLines = buildArgs.map(k => `          ${k}: ${this.ghaSecret(k)}`).join('\n')
     const buildEnvBlock = buildArgs.length > 0 ? '\n' + buildEnvLines : ''
-    const installCommand = this.frontendInstallCommand(svc, ci)
-    const installStepName = ci.drs.enabled ? 'Install DRS registry packages' : 'Install Dependencies'
+    const plan = ci.drs.enabled ? this.frontendDrsPlan(svc) : undefined
+    const installCommand = this.frontendInstallCommand(ci, plan)
+    const artifactPrefix = ci.drs.enabled ? this.frontendWorkingDirectory(svc) + '/' : ''
+    const checkoutStep = ci.drs.enabled
+      ? [
+        '      - name: Checkout Frontend',
+        '        uses: actions/checkout@v4',
+        '        with:',
+        '          path: ' + this.frontendWorkingDirectory(svc),
+        '',
+        ...this.frontendDrsBootstrapSteps(plan!),
+      ]
+      : [
+        '      - name: Checkout',
+        '        uses: actions/checkout@v4',
+        '',
+      ]
+    const setupNodeStep = ci.drs.enabled
+      ? [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '          cache-dependency-path: ' + this.frontendWorkingDirectory(svc) + '/package-lock.json',
+        '',
+      ]
+      : [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '',
+      ]
+    const installStepName = ci.drs.enabled ? 'Install DRS dependencies' : 'Install Dependencies'
+    const workingDirectory = ci.drs.enabled ? this.frontendWorkingDirectory(svc) : undefined
 
     return [
       'name: Deploy Frontend',
@@ -130,25 +199,21 @@ export class CiGenerateCommand {
       '    runs-on: ubuntu-latest',
       '',
       '    steps:',
-      '      - name: Checkout',
-      '        uses: actions/checkout@v4',
-      '',
-      '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
-      '        with:',
-      '          node-version: 20',
-      '          cache: npm',
-      '',
+      ...checkoutStep,
+      ...setupNodeStep,
       '      - name: ' + installStepName,
+      ...(workingDirectory ? ['        working-directory: ' + workingDirectory] : []),
       '        run: |',
       '          ' + installCommand,
       '',
       '      - name: Build Frontend',
+      ...(workingDirectory ? ['        working-directory: ' + workingDirectory] : []),
       '        env:',
       '          VITE_API_URL: /api' + buildEnvBlock,
       '        run: npm run build',
       '',
       '      - name: Generate nginx config',
+      ...(workingDirectory ? ['        working-directory: ' + workingDirectory] : []),
       '        run: npm run nginx:generate',
       '',
       '      - name: Setup SSH',
@@ -169,7 +234,7 @@ export class CiGenerateCommand {
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       '          DEPLOY_PATH: ' + this.ghaSecret('DEPLOY_PATH'),
       '        run: |',
-      '          rsync -az --delete --no-perms --no-times -e "ssh -p ${DEPLOY_PORT:-22}" dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"',
+      '          rsync -az --delete --no-perms --no-times -e "ssh -p ${DEPLOY_PORT:-22}" ' + artifactPrefix + 'dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"',
       '',
       '      - name: Upload nginx config',
       '        env:',
@@ -177,7 +242,7 @@ export class CiGenerateCommand {
       '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       '        run: |',
-      '          scp -P "${DEPLOY_PORT:-22}" deploy/generated-nginx/panom.conf "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/panom.conf"',
+      '          scp -P "${DEPLOY_PORT:-22}" ' + artifactPrefix + 'deploy/generated-nginx/panom.conf "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/panom.conf"',
       '',
       '      - name: Validate and reload nginx',
       '        env:',
@@ -216,8 +281,45 @@ export class CiGenerateCommand {
       '            --build-arg VITE_API_URL="$VITE_API_URL" \\',
       ...buildArgs.map(k => '            --build-arg ' + k + '="$' + k + '" \\'),
     ].join('\n')
-    const installCommand = this.frontendInstallCommand(svc, ci)
-    const installStepName = ci.drs.enabled ? 'Install DRS registry packages' : 'Install Dependencies'
+    const plan = ci.drs.enabled ? this.frontendDrsPlan(svc) : undefined
+    const installCommand = this.frontendInstallCommand(ci, plan)
+    const installStepName = ci.drs.enabled ? 'Install DRS dependencies' : 'Install Dependencies'
+    const workingDirectory = ci.drs.enabled ? this.frontendWorkingDirectory(svc) : undefined
+    const dockerfilePath = ci.drs.enabled
+      ? this.frontendWorkingDirectory(svc) + '/Dockerfile'
+      : 'Dockerfile'
+    const checkoutSteps = ci.drs.enabled
+      ? [
+        '      - name: Checkout Frontend',
+        '        uses: actions/checkout@v4',
+        '        with:',
+        '          path: ' + this.frontendWorkingDirectory(svc),
+        '',
+        ...this.frontendDrsBootstrapSteps(plan!),
+      ]
+      : [
+        '      - name: Checkout',
+        '        uses: actions/checkout@v4',
+        '',
+      ]
+    const setupNodeStep = ci.drs.enabled
+      ? [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '          cache-dependency-path: ' + this.frontendWorkingDirectory(svc) + '/package-lock.json',
+        '',
+      ]
+      : [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '',
+      ]
 
     return [
       'name: Deploy Frontend',
@@ -239,16 +341,10 @@ export class CiGenerateCommand {
       '      FRONTEND_IMAGE: ' + image,
       '',
       '    steps:',
-      '      - name: Checkout',
-      '        uses: actions/checkout@v4',
-      '',
-      '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
-      '        with:',
-      '          node-version: 20',
-      '          cache: npm',
-      '',
+      ...checkoutSteps,
+      ...setupNodeStep,
       '      - name: ' + installStepName,
+      ...(workingDirectory ? ['        working-directory: ' + workingDirectory] : []),
       '        run: |',
       '          ' + installCommand,
       '',
@@ -271,7 +367,7 @@ export class CiGenerateCommand {
       '          docker build \\',
       '            -t "$FRONTEND_IMAGE" \\',
       buildArgFlagLines,
-      '            .',
+      '            -f "' + dockerfilePath + '" .',
       '',
       '      - name: Push frontend image',
       '        run: docker push "$FRONTEND_IMAGE"',
@@ -330,8 +426,10 @@ export class CiGenerateCommand {
     const image = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository') + ':latest'
     const secrets = ci.backend.envSecrets
     const hasWorker = workerSvc !== undefined
+    const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
+    const backendCheckoutPath = this.frontendWorkingDirectory(apiSvc)
+    const backendDockerfilePath = ci.drs.enabled ? backendCheckoutPath + '/Dockerfile' : '.'
 
-    // Env block for "Write .env on server" step — one line per secret
     const FIXED_KEYS = new Set(['NODE_ENV', 'PORT'])
     const envSecretsLines = secrets.map(k => '          ' + k + ': ' + this.ghaSecret(k)).join('\n')
     const envContentLines = secrets
@@ -351,6 +449,33 @@ export class CiGenerateCommand {
       '          echo "[deploy] Worker container started."',
       '',
     ].join('\n') : ''
+
+    const checkoutSteps = ci.drs.enabled
+      ? [
+        '      - name: Checkout Backend',
+        '        uses: actions/checkout@v4',
+        '        with:',
+        '          path: ' + backendCheckoutPath,
+        '',
+        ...this.frontendDrsBootstrapSteps(plan!),
+      ]
+      : [
+        '      - name: Checkout',
+        '        uses: actions/checkout@v4',
+        '',
+      ]
+
+    const setupNodeStep = ci.drs.enabled
+      ? [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '          cache-dependency-path: ' + backendCheckoutPath + '/package-lock.json',
+        '',
+      ]
+      : []
 
     return [
       'name: Deploy',
@@ -374,9 +499,8 @@ export class CiGenerateCommand {
       '      packages: write',
       '',
       '    steps:',
-      '      - name: Checkout',
-      '        uses: actions/checkout@v4',
-      '',
+      ...checkoutSteps,
+      ...setupNodeStep,
       '      - name: Login GHCR',
       '        env:',
       '          GHCR_TOKEN: ' + this.ghaSecret('GITHUB_TOKEN'),
@@ -391,7 +515,7 @@ export class CiGenerateCommand {
       '',
       '      - name: Build Image',
       '        run: |',
-      '          docker build -t ' + image + ' .',
+      '          docker build -t ' + image + ' -f ' + backendDockerfilePath + ' .',
       '',
       '      - name: Push Image',
       '        run: |',
@@ -552,7 +676,96 @@ export class CiGenerateCommand {
   ): string {
     const backendImage = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository') + '/panom-backend:latest'
     const secrets = ci.backend.envSecrets
+    const backendRepoPath = ci.drs.enabled ? this.frontendWorkingDirectory(apiSvc) : '.'
+    const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
     const envSecretsLines = secrets.map(k => '          ' + k + ': ' + this.ghaSecret(k)).join('\n')
+    const checkoutSteps = ci.drs.enabled
+      ? [
+        '      - name: Checkout Backend',
+        '        uses: actions/checkout@v4',
+        '        with:',
+        '          path: ' + backendRepoPath,
+        '',
+        ...this.frontendDrsBootstrapSteps(plan!),
+      ]
+      : [
+        '      - name: Checkout',
+        '        uses: actions/checkout@v4',
+        '',
+      ]
+
+    const setupNodeStep = ci.drs.enabled
+      ? [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '          cache-dependency-path: ' + backendRepoPath + '/package-lock.json',
+        '',
+      ]
+      : [
+        '      - name: Setup Node',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: 20',
+        '          cache: npm',
+        '',
+      ]
+
+    const installStep = ci.drs.enabled
+      ? [
+        '      - name: Install DRS dependencies',
+        '        working-directory: ' + backendRepoPath,
+        '        run: npm ci',
+        '',
+      ]
+      : [
+        '      - name: Install root dependencies',
+        '        run: npm ci',
+        '',
+      ]
+
+    const buildImageStep = ci.drs.enabled
+      ? [
+        '      - name: Build backend image',
+        '        working-directory: ' + backendRepoPath,
+        '        run: docker build -t "$BACKEND_IMAGE" .',
+        '',
+      ]
+      : [
+        '      - name: Build backend image',
+        '        run: docker build -t "$BACKEND_IMAGE" .',
+        '',
+      ]
+
+    const generateQuadletStep = ci.drs.enabled
+      ? [
+        '      - name: Generate Quadlet files',
+        '        working-directory: ' + backendRepoPath,
+        '        env:',
+        '          MESH_RUNTIME_MODE: podman',
+        '          MESH_SECRET: ' + this.ghaSecret('MESH_SECRET'),
+        '          REDIS_URL: ' + this.ghaSecret('REDIS_URL'),
+        '          PANOM_BACKEND_IMAGE: ' + this.ghaEnv('BACKEND_IMAGE'),
+        '          MESH_CONFIG_MOUNT_SOURCE: /home/' + this.ghaSecret('DEPLOY_USER') + '/.panom-mesh/runtime',
+        envSecretsLines,
+        '        run: npm run mesh:podman:generate -- --force --out .mesh/quadlet',
+        '',
+      ]
+      : [
+        '      - name: Generate Quadlet files',
+        '        env:',
+        '          MESH_RUNTIME_MODE: podman',
+        '          MESH_SECRET: ' + this.ghaSecret('MESH_SECRET'),
+        '          REDIS_URL: ' + this.ghaSecret('REDIS_URL'),
+        '          PANOM_BACKEND_IMAGE: ' + this.ghaEnv('BACKEND_IMAGE'),
+        '          MESH_CONFIG_MOUNT_SOURCE: /home/' + this.ghaSecret('DEPLOY_USER') + '/.panom-mesh/runtime',
+        envSecretsLines,
+        '        run: npm run mesh:podman:generate -- --force --out .mesh/quadlet',
+        '',
+      ]
+    const quadletPath = ci.drs.enabled ? backendRepoPath + '/.mesh/quadlet/' : '.mesh/quadlet/'
 
     return [
       'name: Deploy',
@@ -578,17 +791,9 @@ export class CiGenerateCommand {
       '      BACKEND_IMAGE: ' + backendImage,
       '',
       '    steps:',
-      '      - name: Checkout',
-      '        uses: actions/checkout@v4',
-      '',
-      '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
-      '        with:',
-      '          node-version: 20',
-      '          cache: npm',
-      '',
-      '      - name: Install root dependencies',
-      '        run: npm ci',
+      ...checkoutSteps,
+      ...setupNodeStep,
+      ...installStep,
       '',
       '      - name: Login GHCR',
       '        env:',
@@ -602,21 +807,12 @@ export class CiGenerateCommand {
       '          done',
       '          exit 1',
       '',
-      '      - name: Build backend image',
-      '        run: docker build -t "$BACKEND_IMAGE" .',
+      ...buildImageStep,
       '',
       '      - name: Push backend image',
       '        run: docker push "$BACKEND_IMAGE"',
       '',
-      '      - name: Generate Quadlet files',
-      '        env:',
-      '          MESH_RUNTIME_MODE: podman',
-      '          MESH_SECRET: ' + this.ghaSecret('MESH_SECRET'),
-      '          REDIS_URL: ' + this.ghaSecret('REDIS_URL'),
-      '          PANOM_BACKEND_IMAGE: ' + this.ghaEnv('BACKEND_IMAGE'),
-      '          MESH_CONFIG_MOUNT_SOURCE: /home/' + this.ghaSecret('DEPLOY_USER') + '/.panom-mesh/runtime',
-      envSecretsLines,
-      '        run: npm run mesh:podman:generate -- --force --out .mesh/quadlet',
+      ...generateQuadletStep,
       '',
       '      - name: Setup SSH',
       '        env:',
@@ -636,7 +832,7 @@ export class CiGenerateCommand {
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       '        run: |',
       "          ssh -p \"${DEPLOY_PORT:-22}\" \"${DEPLOY_USER}@${DEPLOY_HOST}\" 'mkdir -p ~/.config/containers/systemd'",
-      '          rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" .mesh/quadlet/ "${DEPLOY_USER}@${DEPLOY_HOST}:~/.config/containers/systemd/"',
+      '          rsync -az --delete -e "ssh -p ${DEPLOY_PORT:-22}" ' + quadletPath + ' "${DEPLOY_USER}@${DEPLOY_HOST}:~/.config/containers/systemd/"',
       '',
       '      - name: Reload and restart backend units',
       '        env:',
