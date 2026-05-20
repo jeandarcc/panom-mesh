@@ -17,7 +17,7 @@ export class ProxyHeaders {
     headers: IncomingHttpHeaders,
     target: URL,
     remoteAddress?: string,
-    options: { serviceType?: MeshServiceType; meshCookieName?: string } = {}
+    options: { serviceType?: MeshServiceType; meshCookieName?: string; forwardedProto?: 'http' | 'https' } = {}
   ): IncomingHttpHeaders {
     const next: IncomingHttpHeaders = {}
     for (const [key, value] of Object.entries(headers)) {
@@ -35,7 +35,7 @@ export class ProxyHeaders {
 
     next.host = target.host
     next['x-forwarded-host'] = headers.host
-    next['x-forwarded-proto'] = 'http'
+    next['x-forwarded-proto'] = options.forwardedProto ?? 'http'
     if (remoteAddress) {
       const current = headers['x-forwarded-for']
       next['x-forwarded-for'] = current ? `${String(current)}, ${remoteAddress}` : remoteAddress

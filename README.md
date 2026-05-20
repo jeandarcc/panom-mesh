@@ -4,6 +4,15 @@ Application mesh runtime for multi-instance Node.js apps.
 
 `@panomapp/mesh` gives one config file and one CLI for running frontend, backend, worker and router processes behind a mesh gateway. It supports local process orchestration, health-aware reverse proxying, sticky sessions, Redis-backed service discovery, graceful drain, Podman/Quadlet generation, HSM route mapping, terminal observability, distributed log streaming, distributed locks, leader election and cleanup task primitives.
 
+## Docs
+
+For the book-style documentation, start here:
+
+- [docs/README.md](./docs/README.md)
+- [docs/01-introduction.md](./docs/01-introduction.md)
+- [docs/02-quick-start.md](./docs/02-quick-start.md)
+- [docs/03-router-and-routing.md](./docs/03-router-and-routing.md)
+
 ## Installation
 
 ```bash
@@ -98,6 +107,48 @@ Watch by unique id prefix:
 ```bash
 mesh watch api-a7
 ```
+
+## Local HTTPS development
+
+Mesh can expose a native HTTPS router for browser-facing local development. Configure `router.tls`, then generate a trusted certificate with `mesh cert:init`.
+
+```ts
+export default defineMeshConfig({
+  app: 'my-app',
+  router: {
+    host: 'dev.my-app.com',
+    port: 3000,
+    secret: process.env.MESH_SECRET ?? 'dev-only-change-me',
+    tls: {
+      enabled: true,
+      certPath: '.mesh/certs/dev.my-app.com.pem',
+      keyPath: '.mesh/certs/dev.my-app.com-key.pem',
+      minVersion: 'TLSv1.2',
+      additionalPorts: [443]
+    }
+  }
+})
+```
+
+```bash
+mesh cert:init
+```
+
+When TLS is enabled:
+
+- Mesh uses `https.createServer(...)` for the public router listeners.
+- `x-forwarded-proto` is derived from the real incoming connection (`http` or `https`).
+- Sticky session cookies default to `Secure`.
+- Additional TLS listener ports are supported alongside the primary router port.
+
+For a privileged macOS `443` listener, generate first-class launchd artifacts:
+
+```bash
+mesh launchd:generate
+sudo ./.mesh/launchd/install-router-443.sh
+```
+
+This creates a root-owned launchd job that runs only the Mesh router on `443` while your normal developer session continues to own the fallback `https://host:3000` listener.
 
 ## Mesh router
 

@@ -2,6 +2,7 @@ export type MeshRuntimeMode = 'process' | 'podman'
 export type MeshServiceType = 'frontend' | 'backend' | 'worker' | 'router'
 export type MeshServiceStrategy = 'round-robin' | 'session-affinity' | 'least-connections'
 export type MeshInstanceStatus = 'starting' | 'running' | 'draining' | 'stopped' | 'failed' | 'expired' | 'unknown'
+export type MeshTlsMinVersion = 'TLSv1' | 'TLSv1.1' | 'TLSv1.2' | 'TLSv1.3'
 
 export type MeshHsmRouteMode = 'canonical' | 'backend' | 'both'
 
@@ -98,6 +99,17 @@ export interface MeshRouterConfig {
   readonly secureCookies?: boolean
   readonly drainTimeoutMs?: number
   readonly socketDrainTimeoutMs?: number
+  readonly tls?: MeshRouterTlsConfig
+}
+
+export interface MeshRouterTlsConfig {
+  readonly enabled?: boolean
+  readonly certPath?: string
+  readonly keyPath?: string
+  readonly caPath?: string
+  readonly passphraseEnv?: string
+  readonly minVersion?: MeshTlsMinVersion
+  readonly additionalPorts?: readonly number[]
 }
 
 export type MeshRegistryType = 'file' | 'redis'
@@ -314,6 +326,20 @@ export interface NormalizedMeshRouterConfig {
   readonly secureCookies: boolean
   readonly drainTimeoutMs: number
   readonly socketDrainTimeoutMs: number
+  readonly protocol: 'http' | 'https'
+  readonly publicOrigin: string
+  readonly publicOrigins: readonly string[]
+  readonly tls: NormalizedMeshRouterTlsConfig
+}
+
+export interface NormalizedMeshRouterTlsConfig {
+  readonly enabled: boolean
+  readonly certPath?: string
+  readonly keyPath?: string
+  readonly caPath?: string
+  readonly passphraseEnv?: string
+  readonly minVersion?: MeshTlsMinVersion
+  readonly additionalPorts: readonly number[]
 }
 
 export interface NormalizedMeshRegistryConfig {

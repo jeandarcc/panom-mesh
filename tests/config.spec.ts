@@ -40,6 +40,32 @@ describe('MeshConfigNormalizer', () => {
       }
     })).toThrow(/must start with/)
   })
+
+  it('normalizes TLS router config and derives public origins', () => {
+    const normalized = normalizer.normalize(defineMeshConfig({
+      app: 'panom',
+      router: {
+        host: 'dev.panom.app',
+        port: 3000,
+        tls: {
+          enabled: true,
+          certPath: '.mesh/certs/dev.panom.app.pem',
+          keyPath: '.mesh/certs/dev.panom.app-key.pem',
+          additionalPorts: [443]
+        }
+      },
+      services: { api: { command: 'node api.js', route: '/api' } }
+    }), '/workspace/panom')
+
+    expect(normalized.router.protocol).toBe('https')
+    expect(normalized.router.secureCookies).toBe(true)
+    expect(normalized.router.tls.certPath).toBe('/workspace/panom/.mesh/certs/dev.panom.app.pem')
+    expect(normalized.router.publicOrigin).toBe('https://dev.panom.app')
+    expect(normalized.router.publicOrigins).toEqual([
+      'https://dev.panom.app:3000',
+      'https://dev.panom.app'
+    ])
+  })
 })
 
 describe('MeshConfigNormalizer observability', () => {

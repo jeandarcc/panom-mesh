@@ -17,6 +17,7 @@ import type {
 } from '../core/types.js'
 import { HsmRouteMapper } from '../hsm/HsmRouteMapper.js'
 import { HsmSchemaValidator } from '../hsm/HsmSchemaValidator.js'
+import { formatOrigin } from '../utils/origin.js'
 
 const DEFAULT_PORT_RANGE: MeshPortRange = { from: 31_000, to: 32_999 }
 
@@ -25,7 +26,7 @@ export class MeshConfigNormalizer {
     this.assertConfig(config)
 
     const runtime = this.normalizeRuntime(config, projectRoot)
-    const router = this.normalizeRouter(config)
+    const router = this.normalizeRouter(config, projectRoot)
     const observability = this.normalizeObservability(config)
     const registry = this.normalizeRegistry(config, router)
     const streaming = this.normalizeStreaming(config, registry)
@@ -248,20 +249,56 @@ export class MeshConfigNormalizer {
   }
 
 
-  private normalizeRouter(config: MeshConfig): NormalizedMeshRouterConfig {
+  private normalizeRouter(config: MeshConfig, projectRoot: string): NormalizedMeshRouterConfig {
     const router = config.router ?? {}
+    const tls = router.tls ?? {}
+    const tlsEnabled = tls.enabled ?? false
+    const additionalPorts = this.normalizeAdditionalPorts(tls.additionalPorts ?? [], router.port ?? 8080)
+    const certPath = tls.certPath ? path.resolve(projectRoot, tls.certPath) : undefined
+    const keyPath = tls.keyPath ? path.resolve(projectRoot, tls.keyPath) : undefined
+    const caPath = tls.caPath ? path.resolve(projectRoot, tls.caPath) : undefined
+    if (tlsEnabled && (!certPath || !keyPath)) {
+      throw new MeshConfigError('router.tls.certPath and router.tls.keyPath are required when router.tls.enabled is true.')
+    }
+    const port = router.port ?? 8080
+    const protocol = tlsEnabled ? 'https' as const : 'http' as const
+    const publicPorts = [port, ...additionalPorts]
+    const canonicalPort = tlsEnabled && publicPorts.includes(443) ? 443 : port
     return {
       enabled: router.enabled ?? true,
       host: router.host ?? '127.0.0.1',
-      port: router.port ?? 8080,
+      port,
       sessionAffinity: router.sessionAffinity ?? true,
       cookieName: router.cookieName ?? 'pm_mesh',
       secret: router.secret ?? 'dev-only-mesh-secret',
       requestTimeoutMs: router.requestTimeoutMs ?? 30_000,
-      secureCookies: router.secureCookies ?? false,
+      secureCookies: router.secureCookies ?? tlsEnabled,
       drainTimeoutMs: router.drainTimeoutMs ?? 15_000,
-      socketDrainTimeoutMs: router.socketDrainTimeoutMs ?? 10_000
+      socketDrainTimeoutMs: router.socketDrainTimeoutMs ?? 10_000,
+      protocol,
+      publicOrigin: formatOrigin(protocol, router.host ?? '127.0.0.1', canonicalPort),
+      publicOrigins: publicPorts.map((listenPort) => formatOrigin(protocol, router.host ?? '127.0.0.1', listenPort)),
+      tls: {
+        enabled: tlsEnabled,
+        ...(certPath ? { certPath } : {}),
+        ...(keyPath ? { keyPath } : {}),
+        ...(caPath ? { caPath } : {}),
+        ...(tls.passphraseEnv ? { passphraseEnv: tls.passphraseEnv } : {}),
+        ...(tls.minVersion ? { minVersion: tls.minVersion } : {}),
+        additionalPorts,
+      }
     }
+  }
+
+  private normalizeAdditionalPorts(ports: readonly number[], primaryPort: number): readonly number[] {
+    const unique = new Set<number>()
+    for (const port of ports) {
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        throw new MeshConfigError('router.tls.additionalPorts must contain valid TCP ports.')
+      }
+      if (port !== primaryPort) unique.add(port)
+    }
+    return [...unique].sort((a, b) => a - b)
   }
 
   private normalizeService(

@@ -158,14 +158,16 @@ export class MeshProcessSupervisor {
       pid: child.pid ?? null,
       port: this.config.router.port,
       host: this.config.router.host,
-      url: `http://${this.config.router.host}:${this.config.router.port}`,
+      url: this.config.router.publicOrigin,
       command,
       cwd: this.config.projectRoot,
       logFile,
       startedAt: nowIso(),
       metadata: {
         meshApp: this.config.app,
-        role: 'mesh-router'
+        role: 'mesh-router',
+        publicOrigins: this.config.router.publicOrigins,
+        listenerPorts: [this.config.router.port, ...this.config.router.tls.additionalPorts],
       }
     }
     return { record, child }

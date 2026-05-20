@@ -13,6 +13,8 @@ import { DashboardCommand } from '../observability/DashboardCommand.js'
 import { StreamCommand } from '../streaming/StreamCommand.js'
 import { LockFactory } from '../locks/LockFactory.js'
 import { LeaderElection } from '../leader/LeaderElection.js'
+import { CertInitCommand } from './CertInitCommand.js'
+import { LaunchdCommand } from '../macos/LaunchdCommand.js'
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv)
@@ -29,6 +31,26 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
   const config = await new MeshConfigLoader().load(stringFlag(args.flags, 'config'))
   const runtime = new MeshRuntime(config)
+
+  if (args.command === 'cert:init') {
+    process.stdout.write(await new CertInitCommand().run(config, {
+      force: flagBoolean(args.flags, 'force') ?? false
+    }))
+    return
+  }
+
+  if (args.command === 'launchd:generate') {
+    const launchdOutDir = stringFlag(args.flags, 'out')
+    const launchdLabel = stringFlag(args.flags, 'label')
+    const launchdOptions: import('../macos/LaunchdCommand.js').MeshLaunchdGenerateOptions = {
+      force: flagBoolean(args.flags, 'force') ?? false,
+      print: flagBoolean(args.flags, 'print') ?? false,
+      ...(launchdOutDir !== undefined ? { outputDir: launchdOutDir } : {}),
+      ...(launchdLabel !== undefined ? { label: launchdLabel } : {})
+    }
+    process.stdout.write(await new LaunchdCommand(config).generate(launchdOptions))
+    return
+  }
 
 
   if (args.command === 'router') {
@@ -237,7 +259,10 @@ function table(rows: readonly Record<string, string>[], keys: readonly string[],
 }
 
 function help(): string {
-  return `@panomapp/mesh\n\nCommands:\n  mesh init                 Create mesh.config.ts and package scripts\n  mesh run [service]        Run configured services in process mode\n  mesh run --all            Run all configured services\n  mesh ps                   List known instances\n  mesh watch <id-prefix>    Tail one instance log by unique id prefix
+  return `@panomapp/mesh\n\nCommands:\n  mesh init                 Create mesh.config.ts and package scripts
+  mesh cert:init            Create or refresh local TLS certificates from router.tls config
+  mesh launchd:generate     Generate macOS launchd files for a privileged 443 mesh router
+  mesh run [service]        Run configured services in process mode\n  mesh run --all            Run all configured services\n  mesh ps                   List known instances\n  mesh watch <id-prefix>    Tail one instance log by unique id prefix
   mesh stream [id-prefix]   Stream distributed mesh logs/events\n  mesh locks                List active distributed locks\n  mesh leaders              List active leader leases\n  mesh cleanup              Show cleanup scheduler integration info\n  mesh stop [service|id]    Stop all or selected instances
   mesh hsm:plan             Print HSM-derived mesh route plan
   mesh podman:plan          Print podman run plan
@@ -255,9 +280,10 @@ function help(): string {
   --raw                     Print raw log chunks in mesh stream
   --drain-timeout <ms>      Override graceful drain wait for stop
   --shutdown-timeout <ms>   Override SIGTERM wait for stop
-  --out <dir>               Quadlet output directory for podman:generate
-  --print                   Print generated Quadlet contents
-  --force                   Overwrite Quadlet files or force stop\n`
+  --out <dir>               Output directory for podman:generate / launchd:generate
+  --label <id>              launchd label override for launchd:generate
+  --print                   Print generated file contents
+  --force                   Overwrite generated files or force stop\n`
 }
 
 main().catch(error => {

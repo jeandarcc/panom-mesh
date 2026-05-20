@@ -1,10 +1,13 @@
 import http from 'node:http'
 import fs from 'node:fs'
+import crypto from 'node:crypto'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MeshConfigNormalizer } from '../src/config/MeshConfigNormalizer.js'
 import { MeshRouterServer } from '../src/router/MeshRouterServer.js'
+import { ProxyHeaders } from '../src/router/ProxyHeaders.js'
 import { RouteMatcher } from '../src/router/RouteMatcher.js'
 import { StickySession } from '../src/router/StickySession.js'
 import { MeshStateStore } from '../src/state/MeshStateStore.js'
@@ -35,6 +38,23 @@ describe('StickySession', () => {
     expect(payload?.nodeId).toBe('api-a1')
     expect(sticky.read({ cookie: header.split(';')[0] }, 'web')).toBeNull()
     expect(sticky.read({ cookie: 'pm_mesh=bad.value' }, 'api')).toBeNull()
+  })
+})
+
+describe('ProxyHeaders', () => {
+  it('propagates HTTPS forwarded proto and strips browser cookies for frontend services', () => {
+    const headers = new ProxyHeaders().build({
+      host: 'dev.panom.app',
+      cookie: 'pm_mesh=mesh; panom_access=token; theme=dark'
+    }, new URL('http://127.0.0.1:5173/__vite_hmr'), '127.0.0.1', {
+      serviceType: 'frontend',
+      meshCookieName: 'pm_mesh',
+      forwardedProto: 'https'
+    })
+
+    expect(headers.cookie).toBeUndefined()
+    expect(headers['x-forwarded-proto']).toBe('https')
+    expect(headers['x-forwarded-host']).toBe('dev.panom.app')
   })
 })
 
@@ -152,6 +172,60 @@ describe('MeshRouterServer', () => {
     expect(res.body).toContain('session=real-session; theme=dark')
     expect(res.body).not.toContain('pm_mesh=')
   })
+
+  it('forwards websocket upgrade headers to frontend services', async () => {
+    const projectRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-router-upgrade-'))
+    const stateDir = path.join(projectRoot, '.mesh')
+    let receivedConnection = ''
+    let receivedUpgrade = ''
+    let receivedProtocol = ''
+    const frontend = await listenUpgrade((req, socket) => {
+      receivedConnection = String(req.headers.connection ?? '')
+      receivedUpgrade = String(req.headers.upgrade ?? '')
+      receivedProtocol = String(req.headers['sec-websocket-protocol'] ?? '')
+      socket.write([
+        'HTTP/1.1 101 Switching Protocols',
+        'Connection: Upgrade',
+        'Upgrade: websocket',
+        `Sec-WebSocket-Accept: ${websocketAccept(String(req.headers['sec-websocket-key'] ?? ''))}`,
+        receivedProtocol ? `Sec-WebSocket-Protocol: ${receivedProtocol}` : '',
+        '',
+        ''
+      ].filter(Boolean).join('\r\n'))
+      socket.end()
+    })
+    cleanup.push(frontend.close)
+
+    const routerPort = await freePort()
+    const config = new MeshConfigNormalizer().normalize({
+      app: 'test-upgrade',
+      router: { port: routerPort, secret: 'test-secret-123' },
+      runtime: { stateDir, logsDir: path.join(stateDir, 'logs') },
+      services: {
+        frontend: {
+          type: 'frontend',
+          command: 'npm run dev',
+          route: '/'
+        }
+      }
+    }, projectRoot, path.join(projectRoot, 'mesh.config.ts'))
+
+    const store = new MeshStateStore('test-upgrade', stateDir)
+    await store.upsert({
+      ...record('frontend', '/', frontend.port, process.pid),
+      serviceType: 'frontend'
+    })
+
+    const router = new MeshRouterServer({ config })
+    await router.listen()
+    cleanup.push(() => router.close())
+
+    const response = await upgradeRequest(routerPort, '/__vite_hmr?token=test-token')
+    expect(response).toContain('101 Switching Protocols')
+    expect(receivedConnection.toLowerCase()).toContain('upgrade')
+    expect(receivedUpgrade.toLowerCase()).toBe('websocket')
+    expect(receivedProtocol).toBe('vite-hmr')
+  })
 })
 
 describe('MeshRouterServer management endpoints', () => {
@@ -214,6 +288,23 @@ async function listen(handler: http.RequestListener): Promise<{ port: number; cl
   }
 }
 
+async function listenUpgrade(
+  upgradeHandler: (req: http.IncomingMessage, socket: net.Socket) => void
+): Promise<{ port: number; close: () => Promise<void> }> {
+  const server = http.createServer((_req, res) => {
+    res.statusCode = 200
+    res.end('ok')
+  })
+  server.on('upgrade', (req, socket) => upgradeHandler(req, socket))
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('missing test server address')
+  return {
+    port: address.port,
+    close: () => new Promise(resolve => server.close(() => resolve()))
+  }
+}
+
 async function freePort(): Promise<number> {
   const server = http.createServer()
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -239,6 +330,34 @@ async function request(
     req.on('error', reject)
     req.end()
   })
+}
+
+async function upgradeRequest(port: number, pathName: string): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write([
+        `GET ${pathName} HTTP/1.1`,
+        'Host: dev.panom.app',
+        'Connection: Upgrade',
+        'Upgrade: websocket',
+        'Sec-WebSocket-Version: 13',
+        'Sec-WebSocket-Protocol: vite-hmr',
+        'Sec-WebSocket-Key: dGVzdC1tZXNoLXJvdXRlcg==',
+        '',
+        ''
+      ].join('\r\n'))
+    })
+
+    let response = ''
+    socket.setEncoding('utf8')
+    socket.on('data', (chunk) => { response += chunk })
+    socket.on('end', () => resolve(response))
+    socket.on('error', reject)
+  })
+}
+
+function websocketAccept(key: string): string {
+  return crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
 }
 
 describe('MeshRouterServer graceful drain', () => {

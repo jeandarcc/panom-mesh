@@ -24,6 +24,7 @@ export { ActiveConnectionTracker, DrainController } from './drain/index.js'
 export type {
   MeshConfig,
   MeshRouterConfig,
+  MeshRouterTlsConfig,
   MeshRuntimeConfig,
   MeshRegistryConfig,
   MeshObservabilityConfig,
@@ -42,6 +43,8 @@ export type {
   MeshStopOptions,
   MeshConnectionCounters,
   NormalizedMeshConfig,
+  NormalizedMeshRouterConfig,
+  NormalizedMeshRouterTlsConfig,
   NormalizedMeshServiceConfig,
   NormalizedMeshRegistryConfig,
   NormalizedMeshObservabilityConfig,

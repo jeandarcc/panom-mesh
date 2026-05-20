@@ -1,5 +1,7 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
+import https, { type ServerOptions as HttpsServerOptions } from 'node:https'
 import net from 'node:net'
+import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { MeshConnectionCounters, NormalizedMeshConfig } from '../core/types.js'
 import { ActiveConnectionTracker, type ActiveConnectionSnapshot } from '../drain/ActiveConnectionTracker.js'
@@ -9,6 +11,7 @@ import { ProxyHeaders } from './ProxyHeaders.js'
 import { RouteMatcher } from './RouteMatcher.js'
 import { StickySession } from './StickySession.js'
 import { RouterMetrics } from '../observability/RouterMetrics.js'
+import { formatOrigin } from '../utils/origin.js'
 
 export interface MeshRouterServerOptions {
   readonly config: NormalizedMeshConfig
@@ -21,7 +24,7 @@ export interface MeshRouterDrainResult {
 }
 
 export class MeshRouterServer {
-  private readonly server: http.Server
+  private readonly servers: http.Server[]
   private readonly registry: InstanceRegistry
   private readonly matcher = new RouteMatcher()
   private readonly headers = new ProxyHeaders()
@@ -39,19 +42,28 @@ export class MeshRouterServer {
       secret: options.config.router.secret,
       secure: options.config.router.secureCookies
     }))
-    this.server = http.createServer((req, res) => void this.handle(req, res))
-    this.server.on('upgrade', (req, socket, head) => void this.handleUpgrade(req, socket as net.Socket, head))
+    this.servers = this.createServers()
   }
 
   public async listen(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.server.once('error', reject)
-      this.server.listen(this.options.config.router.port, this.options.config.router.host, () => {
-        this.server.off('error', reject)
-        this.log(`mesh router listening on http://${this.options.config.router.host}:${this.options.config.router.port}`)
-        resolve()
-      })
-    })
+    const primaryPort = this.options.config.router.port
+    const additionalPorts = this.options.config.router.tls.enabled
+      ? this.options.config.router.tls.additionalPorts
+      : []
+    const ports = [primaryPort, ...additionalPorts]
+
+    for (let index = 0; index < ports.length; index += 1) {
+      const port = ports[index]!
+      const isPrimary = index === 0
+      const server = this.servers[index]!
+      try {
+        await this.listenServer(server, port)
+        this.log(`mesh router listening on ${formatOrigin(this.protocolFor(server), this.options.config.router.host, port)}`)
+      } catch (error) {
+        if (isPrimary) throw error
+        this.log(`mesh router could not listen on ${formatOrigin(this.protocolFor(server), this.options.config.router.host, port)} (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}); continuing with primary listener`)
+      }
+    }
   }
 
   public connectionSnapshot(): ActiveConnectionSnapshot {
@@ -70,7 +82,7 @@ export class MeshRouterServer {
     this.closed = true
     this.draining = true
 
-    await new Promise<void>(resolve => this.server.close(() => resolve()))
+    await Promise.all(this.servers.map(server => new Promise<void>(resolve => server.close(() => resolve()))))
     const drainTimeoutMs = options.drainTimeoutMs ?? this.options.config.router.drainTimeoutMs
     const socketDrainTimeoutMs = options.socketDrainTimeoutMs ?? this.options.config.router.socketDrainTimeoutMs
     const httpIdle = await this.tracker.waitForIdle(drainTimeoutMs)
@@ -87,8 +99,9 @@ export class MeshRouterServer {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const requestId = randomUUID().slice(0, 8)
+    const forwardedProto = this.protocolForSocket(req.socket)
     try {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+      const url = new URL(req.url ?? '/', `${forwardedProto}://${req.headers.host ?? 'localhost'}`)
       if (this.handleManagement(url, req, res)) return
       if (this.draining) {
         this.respond(res, 503, { error: 'mesh_router_draining', requestId })
@@ -107,7 +120,7 @@ export class MeshRouterServer {
       if (setCookie) res.setHeader('Set-Cookie', setCookie)
       this.balancer.begin(instance.id)
       const endTracked = this.tracker.beginHttp(instance.id)
-      await this.proxyHttp(req, res, target, requestId, instance.serviceType)
+      await this.proxyHttp(req, res, target, requestId, instance.serviceType, forwardedProto)
         .finally(() => {
           endTracked()
           this.balancer.end(instance.id)
@@ -126,7 +139,8 @@ export class MeshRouterServer {
     }
 
     try {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+      const forwardedProto = this.protocolForSocket(req.socket)
+      const url = new URL(req.url ?? '/', `${forwardedProto}://${req.headers.host ?? 'localhost'}`)
       const routed = await this.selectTarget(url.pathname, req)
       if (!routed) {
         this.metrics.recordNoTarget()
@@ -141,7 +155,8 @@ export class MeshRouterServer {
         const path = `${target.pathname}${target.search}`
         const proxiedHeaders = this.headers.build(req.headers, target, req.socket.remoteAddress, {
           serviceType: instance.serviceType,
-          meshCookieName: this.options.config.router.cookieName
+          meshCookieName: this.options.config.router.cookieName,
+          forwardedProto,
         })
         targetSocket.write(`${req.method ?? 'GET'} ${path} HTTP/${req.httpVersion}\r\n`)
         for (const [key, value] of Object.entries(proxiedHeaders)) {
@@ -153,8 +168,10 @@ export class MeshRouterServer {
           }
         }
         targetSocket.write(`host: ${target.host}\r\n`)
+        if (req.headers.connection) targetSocket.write(`connection: ${req.headers.connection}\r\n`)
+        if (req.headers.upgrade) targetSocket.write(`upgrade: ${req.headers.upgrade}\r\n`)
         targetSocket.write(`x-forwarded-host: ${req.headers.host ?? ''}\r\n`)
-        targetSocket.write('x-forwarded-proto: http\r\n')
+        targetSocket.write(`x-forwarded-proto: ${forwardedProto}\r\n`)
         targetSocket.write('\r\n')
         if (head.length) targetSocket.write(head)
         targetSocket.pipe(socket)
@@ -249,14 +266,16 @@ export class MeshRouterServer {
     res: ServerResponse,
     target: URL,
     requestId: string,
-    serviceType: import('../core/types.js').MeshServiceType
+    serviceType: import('../core/types.js').MeshServiceType,
+    forwardedProto: 'http' | 'https'
   ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const proxyReq = http.request(target, {
         method: req.method,
         headers: this.headers.build(req.headers, target, req.socket.remoteAddress, {
           serviceType,
-          meshCookieName: this.options.config.router.cookieName
+          meshCookieName: this.options.config.router.cookieName,
+          forwardedProto,
         }),
         timeout: this.options.config.router.requestTimeoutMs
       }, proxyRes => {
@@ -278,6 +297,51 @@ export class MeshRouterServer {
     })
   }
 
+  private createServers(): http.Server[] {
+    const requestHandler = (req: IncomingMessage, res: ServerResponse) => void this.handle(req, res)
+    const upgradeHandler = (req: IncomingMessage, socket: net.Socket, head: Buffer) => void this.handleUpgrade(req, socket, head)
+    const createHttpServer = () => {
+      const server = http.createServer(requestHandler)
+      server.on('upgrade', upgradeHandler)
+      return server
+    }
+    if (!this.options.config.router.tls.enabled) return [createHttpServer()]
+
+    const httpsOptions = this.httpsOptions()
+    return [createHttpServerForTls(httpsOptions, requestHandler, upgradeHandler), ...this.options.config.router.tls.additionalPorts.map(() => createHttpServerForTls(httpsOptions, requestHandler, upgradeHandler))]
+  }
+
+  private httpsOptions(): HttpsServerOptions {
+    const tls = this.options.config.router.tls
+    return {
+      cert: fs.readFileSync(tls.certPath!, 'utf8'),
+      key: fs.readFileSync(tls.keyPath!, 'utf8'),
+      ...(tls.caPath ? { ca: fs.readFileSync(tls.caPath, 'utf8') } : {}),
+      ...(tls.passphraseEnv ? { passphrase: process.env[tls.passphraseEnv] ?? '' } : {}),
+      ...(tls.minVersion ? { minVersion: tls.minVersion } : {}),
+    }
+  }
+
+  private async listenServer(server: http.Server, port: number): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(port, this.options.config.router.host, () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+  }
+
+  private protocolFor(server: http.Server): 'http' | 'https' {
+    return server instanceof https.Server ? 'https' : 'http'
+  }
+
+  private protocolForSocket(socket: IncomingMessage['socket']): 'http' | 'https' {
+    return 'encrypted' in socket && Boolean((socket as IncomingMessage['socket'] & { encrypted?: boolean }).encrypted)
+      ? 'https'
+      : 'http'
+  }
+
   private respond(res: ServerResponse, statusCode: number, body: Record<string, unknown>): void {
     res.statusCode = statusCode
     res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -287,4 +351,14 @@ export class MeshRouterServer {
   private log(line: string): void {
     this.options.log?.(`[router] ${line}`)
   }
+}
+
+function createHttpServerForTls(
+  options: HttpsServerOptions,
+  requestHandler: (req: IncomingMessage, res: ServerResponse) => void,
+  upgradeHandler: (req: IncomingMessage, socket: net.Socket, head: Buffer) => void
+): http.Server {
+  const server = https.createServer(options, requestHandler)
+  server.on('upgrade', upgradeHandler)
+  return server
 }
