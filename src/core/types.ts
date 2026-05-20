@@ -254,6 +254,12 @@ export interface MeshServiceConfig {
   readonly shutdownTimeoutMs?: number
 }
 
+export interface MeshTestConfig {
+  readonly command: string | readonly string[]
+  readonly cwd?: string
+  readonly env?: Record<string, string | number | boolean | null | undefined>
+}
+
 export interface MeshConfig {
   readonly app: string
   readonly router?: MeshRouterConfig
@@ -264,6 +270,7 @@ export interface MeshConfig {
   readonly streaming?: MeshStreamingConfig
   readonly coordination?: MeshCoordinationConfig
   readonly ci?: MeshCiConfig
+  readonly tests?: Record<string, MeshTestConfig>
   readonly services: Record<string, MeshServiceConfig>
 }
 
@@ -406,6 +413,13 @@ export interface NormalizedMeshServiceConfig {
   readonly shutdownTimeoutMs: number
 }
 
+export interface NormalizedMeshTestConfig {
+  readonly name: string
+  readonly command: string
+  readonly cwd: string
+  readonly env: Record<string, string>
+}
+
 export interface NormalizedMeshConfig {
   readonly app: string
   readonly projectRoot: string
@@ -418,6 +432,7 @@ export interface NormalizedMeshConfig {
   readonly registry: NormalizedMeshRegistryConfig
   readonly hsm: NormalizedMeshHsmBridgeConfig
   readonly ci: NormalizedMeshCiConfig
+  readonly tests: ReadonlyMap<string, NormalizedMeshTestConfig>
   readonly services: ReadonlyMap<string, NormalizedMeshServiceConfig>
 }
 
@@ -535,7 +550,7 @@ export interface NormalizedMeshCiConfig {
 
 export interface MeshCiGenerateOptions {
   /** Only generate for this service name (optional, generates all when omitted). */
-  readonly service?: string
+  readonly service?: string | undefined
   /** Print generated YAML to stdout without writing files. */
   readonly print?: boolean
 }

@@ -14,7 +14,8 @@ import type {
   NormalizedMeshCoordinationConfig,
   MeshHsmMappedRoute,
   NormalizedMeshHsmBridgeConfig,
-  NormalizedMeshCiConfig
+  NormalizedMeshCiConfig,
+  NormalizedMeshTestConfig
 } from '../core/types.js'
 import { HsmRouteMapper } from '../hsm/HsmRouteMapper.js'
 import { HsmSchemaValidator } from '../hsm/HsmSchemaValidator.js'
@@ -35,6 +36,7 @@ export class MeshConfigNormalizer {
     const hsm = this.normalizeHsm(config)
     const hsmRoutesByService = this.groupHsmRoutes(hsm.routes)
     const services = new Map<string, NormalizedMeshServiceConfig>()
+    const tests = this.normalizeTests(config, projectRoot)
 
     for (const [name, service] of Object.entries(config.services)) {
       services.set(name, this.normalizeService(name, service, runtime, projectRoot, hsmRoutesByService.get(name) ?? []))
@@ -54,8 +56,25 @@ export class MeshConfigNormalizer {
       registry,
       hsm,
       ci,
+      tests,
       services
     }
+  }
+
+  private normalizeTests(config: MeshConfig, projectRoot: string): ReadonlyMap<string, NormalizedMeshTestConfig> {
+    const normalized = new Map<string, NormalizedMeshTestConfig>()
+    for (const [name, test] of Object.entries(config.tests ?? {})) {
+      if (!name.trim()) throw new MeshConfigError('Mesh test names must be non-empty.')
+      const command = typeof test.command === 'string' ? test.command : test.command.join(' ')
+      if (!command.trim()) throw new MeshConfigError(`Mesh test "${name}" must define a non-empty command.`)
+      normalized.set(name, {
+        name,
+        command: command.trim(),
+        cwd: path.resolve(projectRoot, test.cwd ?? '.'),
+        env: this.normalizeEnv(test.env ?? {})
+      })
+    }
+    return normalized
   }
 
   private normalizeHsm(config: MeshConfig): NormalizedMeshHsmBridgeConfig {

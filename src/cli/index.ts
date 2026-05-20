@@ -16,6 +16,7 @@ import { LeaderElection } from '../leader/LeaderElection.js'
 import { CertInitCommand } from './CertInitCommand.js'
 import { LaunchdCommand } from '../macos/LaunchdCommand.js'
 import { CiGenerateCommand } from '../ci/CiGenerateCommand.js'
+import { TestCommand } from './TestCommand.js'
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv)
@@ -46,6 +47,15 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       ...(stringFlag(args.flags, 'service') !== undefined ? { service: stringFlag(args.flags, 'service') } : {})
     }
     process.stdout.write(await new CiGenerateCommand(config).generate(ciOptions))
+    return
+  }
+
+  if (args.command === 'test') {
+    const testOptions: import('./TestCommand.js').MeshTestCommandOptions = {
+      json: Boolean(args.flags.get('json')),
+      ...(stringFlag(args.flags, 'service') !== undefined ? { service: stringFlag(args.flags, 'service') } : {})
+    }
+    process.stdout.write(await new TestCommand(config).run(testOptions))
     return
   }
 
@@ -273,6 +283,7 @@ function help(): string {
   mesh cert:init            Create or refresh local TLS certificates from router.tls config
   mesh launchd:generate     Generate macOS launchd files for a privileged 443 mesh router
   mesh ci:generate          Generate per-repo GitHub Actions CI/CD workflows from mesh.config.ts
+  mesh test                 Run registered test commands from mesh.config.ts
   mesh run [service]        Run configured services in process mode\n  mesh run --all            Run all configured services\n  mesh ps                   List known instances\n  mesh watch <id-prefix>    Tail one instance log by unique id prefix
   mesh stream [id-prefix]   Stream distributed mesh logs/events\n  mesh locks                List active distributed locks\n  mesh leaders              List active leader leases\n  mesh cleanup              Show cleanup scheduler integration info\n  mesh stop [service|id]    Stop all or selected instances
   mesh hsm:plan             Print HSM-derived mesh route plan
