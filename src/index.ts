@@ -49,8 +49,19 @@ export type {
   NormalizedMeshRegistryConfig,
   NormalizedMeshObservabilityConfig,
   NormalizedMeshStreamingConfig,
-  NormalizedMeshCoordinationConfig
+  NormalizedMeshCoordinationConfig,
+  // CI workflow generation
+  MeshCiConfig,
+  MeshCiFrontendConfig,
+  MeshCiBackendConfig,
+  MeshCiFrontendStrategy,
+  MeshCiBackendStrategy,
+  MeshCiGenerateOptions,
+  NormalizedMeshCiConfig,
+  NormalizedMeshCiFrontendConfig,
+  NormalizedMeshCiBackendConfig,
 } from './core/types.js'
+export { CiGenerateCommand } from './ci/CiGenerateCommand.js'
 export type { MeshRegistry, MeshRegistryFactory } from './registry/types.js'
 export type { MeshNodeOptions, MeshNodeSignalHandlerOptions } from './node/MeshNode.js'
 export type { MeshEventBus, MeshEventEnvelope, MeshEventHandler } from './events/MeshEventBus.js'

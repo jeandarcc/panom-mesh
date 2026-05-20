@@ -263,6 +263,7 @@ export interface MeshConfig {
   readonly hsm?: MeshHsmBridgeConfig
   readonly streaming?: MeshStreamingConfig
   readonly coordination?: MeshCoordinationConfig
+  readonly ci?: MeshCiConfig
   readonly services: Record<string, MeshServiceConfig>
 }
 
@@ -416,6 +417,7 @@ export interface NormalizedMeshConfig {
   readonly runtime: NormalizedMeshRuntimeConfig
   readonly registry: NormalizedMeshRegistryConfig
   readonly hsm: NormalizedMeshHsmBridgeConfig
+  readonly ci: NormalizedMeshCiConfig
   readonly services: ReadonlyMap<string, NormalizedMeshServiceConfig>
 }
 
@@ -465,6 +467,77 @@ export interface MeshPodmanPlanOptions {
 
 export interface MeshHsmPlanOptions {
   readonly json?: boolean
+}
+
+// ── CI workflow generation ──────────────────────────────────────────────────
+
+export type MeshCiFrontendStrategy = 'rsync' | 'image'
+export type MeshCiBackendStrategy = 'podman' | 'quadlet'
+
+/**
+ * CI configuration for the frontend service.
+ *
+ * `strategy: 'rsync'` (default) — classic static-build + rsync + nginx reload.
+ * `strategy: 'image'` — Docker image build → GHCR push → podman pull on server.
+ *
+ * `buildArgs` lists the VITE_* (or other) env-var names that are pulled from
+ * GitHub Actions secrets and injected as Docker build-args or Vite env at build time.
+ */
+export interface MeshCiFrontendConfig {
+  readonly strategy?: MeshCiFrontendStrategy
+  readonly buildArgs?: readonly string[]
+}
+
+/**
+ * CI configuration for backend (api + worker) services.
+ *
+ * `strategy: 'podman'` (default) — Docker image build → GHCR push → SSH →
+ *   podman stop/rm/pull/run + health-check.
+ * `strategy: 'quadlet'` — same image push, then mesh quadlet generate +
+ *   systemd unit reload via SSH.
+ *
+ * `envSecrets` lists the env-var names to pull from GitHub Actions secrets
+ * and write to the server's `.panom.env` file.  Defaults to every key found
+ * in the api/worker service env map.
+ */
+export interface MeshCiBackendConfig {
+  readonly strategy?: MeshCiBackendStrategy
+  readonly envSecrets?: readonly string[]
+}
+
+/**
+ * Top-level `ci:` block inside `mesh.config.ts`.
+ * Used by `mesh ci:generate` to produce per-repo GitHub Actions workflows.
+ */
+export interface MeshCiConfig {
+  /** Branch that triggers deployment. Default: `'main'` */
+  readonly branch?: string
+  readonly frontend?: MeshCiFrontendConfig
+  readonly backend?: MeshCiBackendConfig
+}
+
+export interface NormalizedMeshCiFrontendConfig {
+  readonly strategy: MeshCiFrontendStrategy
+  readonly buildArgs: readonly string[]
+}
+
+export interface NormalizedMeshCiBackendConfig {
+  readonly strategy: MeshCiBackendStrategy
+  readonly envSecrets: readonly string[]
+}
+
+export interface NormalizedMeshCiConfig {
+  readonly enabled: boolean
+  readonly branch: string
+  readonly frontend: NormalizedMeshCiFrontendConfig
+  readonly backend: NormalizedMeshCiBackendConfig
+}
+
+export interface MeshCiGenerateOptions {
+  /** Only generate for this service name (optional, generates all when omitted). */
+  readonly service?: string
+  /** Print generated YAML to stdout without writing files. */
+  readonly print?: boolean
 }
 
 export interface MeshRunOptions {

@@ -13,7 +13,8 @@ import type {
   NormalizedMeshStreamingConfig,
   NormalizedMeshCoordinationConfig,
   MeshHsmMappedRoute,
-  NormalizedMeshHsmBridgeConfig
+  NormalizedMeshHsmBridgeConfig,
+  NormalizedMeshCiConfig
 } from '../core/types.js'
 import { HsmRouteMapper } from '../hsm/HsmRouteMapper.js'
 import { HsmSchemaValidator } from '../hsm/HsmSchemaValidator.js'
@@ -39,6 +40,8 @@ export class MeshConfigNormalizer {
       services.set(name, this.normalizeService(name, service, runtime, projectRoot, hsmRoutesByService.get(name) ?? []))
     }
 
+    const ci = this.normalizeCi(config, services)
+
     return {
       app: config.app,
       projectRoot,
@@ -50,6 +53,7 @@ export class MeshConfigNormalizer {
       runtime,
       registry,
       hsm,
+      ci,
       services
     }
   }
@@ -401,6 +405,46 @@ export class MeshConfigNormalizer {
   private slug(value: string): string {
     const slug = value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
     return slug || 'mesh'
+  }
+
+  private normalizeCi(config: MeshConfig, services: ReadonlyMap<string, NormalizedMeshServiceConfig>): NormalizedMeshCiConfig {
+    const ci = config.ci ?? {}
+    const enabled = config.ci !== undefined
+
+    // Derive default backend envSecrets from the union of all backend/worker service env keys.
+    const derivedBackendSecrets = (): readonly string[] => {
+      const keys = new Set<string>()
+      for (const svc of services.values()) {
+        if (svc.type === 'backend' || svc.type === 'worker') {
+          for (const key of Object.keys(svc.env)) keys.add(key)
+        }
+      }
+      return [...keys].sort()
+    }
+
+    // Derive default frontend buildArgs from the frontend service's podman.env keys (VITE_* etc.).
+    const derivedFrontendArgs = (): readonly string[] => {
+      const keys = new Set<string>()
+      for (const svc of services.values()) {
+        if (svc.type === 'frontend') {
+          for (const key of Object.keys(svc.podman.env)) keys.add(key)
+        }
+      }
+      return [...keys].sort()
+    }
+
+    return {
+      enabled,
+      branch: ci.branch ?? 'main',
+      frontend: {
+        strategy: ci.frontend?.strategy ?? 'rsync',
+        buildArgs: ci.frontend?.buildArgs ?? derivedFrontendArgs()
+      },
+      backend: {
+        strategy: ci.backend?.strategy ?? 'podman',
+        envSecrets: ci.backend?.envSecrets ?? derivedBackendSecrets()
+      }
+    }
   }
 
   private normalizeEnv(env: Record<string, string | number | boolean | null | undefined>): Record<string, string> {

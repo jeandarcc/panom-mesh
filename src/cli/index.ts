@@ -15,6 +15,7 @@ import { LockFactory } from '../locks/LockFactory.js'
 import { LeaderElection } from '../leader/LeaderElection.js'
 import { CertInitCommand } from './CertInitCommand.js'
 import { LaunchdCommand } from '../macos/LaunchdCommand.js'
+import { CiGenerateCommand } from '../ci/CiGenerateCommand.js'
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv)
@@ -36,6 +37,15 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     process.stdout.write(await new CertInitCommand().run(config, {
       force: flagBoolean(args.flags, 'force') ?? false
     }))
+    return
+  }
+
+  if (args.command === 'ci:generate') {
+    const ciOptions: import('../core/types.js').MeshCiGenerateOptions = {
+      print: flagBoolean(args.flags, 'print') ?? false,
+      ...(stringFlag(args.flags, 'service') !== undefined ? { service: stringFlag(args.flags, 'service') } : {})
+    }
+    process.stdout.write(await new CiGenerateCommand(config).generate(ciOptions))
     return
   }
 
@@ -262,6 +272,7 @@ function help(): string {
   return `@panomapp/mesh\n\nCommands:\n  mesh init                 Create mesh.config.ts and package scripts
   mesh cert:init            Create or refresh local TLS certificates from router.tls config
   mesh launchd:generate     Generate macOS launchd files for a privileged 443 mesh router
+  mesh ci:generate          Generate per-repo GitHub Actions CI/CD workflows from mesh.config.ts
   mesh run [service]        Run configured services in process mode\n  mesh run --all            Run all configured services\n  mesh ps                   List known instances\n  mesh watch <id-prefix>    Tail one instance log by unique id prefix
   mesh stream [id-prefix]   Stream distributed mesh logs/events\n  mesh locks                List active distributed locks\n  mesh leaders              List active leader leases\n  mesh cleanup              Show cleanup scheduler integration info\n  mesh stop [service|id]    Stop all or selected instances
   mesh hsm:plan             Print HSM-derived mesh route plan
@@ -269,15 +280,15 @@ function help(): string {
   mesh podman:generate      Generate Podman Quadlet files
   mesh podman:stop [target] Stop podman-managed containers\n\nOptions:\n  --config <path>           Use a custom config path\n  --instances <n>           Override instance count for selected services\n  --watch=false             Disable live multiplex logs for run\n  --detach                  Start and return immediately
   --router=false            Do not start the mesh router\n  --json                    JSON output for ps/dashboard
-  --once                    Render dashboard once and exit
+  --once                     Render dashboard once and exit
   --interval <ms>           Dashboard refresh interval
-  --logs                    Include dashboard log tails
+  --logs                     Include dashboard log tails
   --log-lines <n>           Lines per instance in dashboard logs
-  --stream                  Use distributed stream for watch
+  --stream                   Use distributed stream for watch
   --kind <log,event,...>    Filter mesh stream by kind
-  --service <name>          Filter mesh stream by service
+  --service <name>          Filter mesh stream by service (also: limit ci:generate to one service)
   --type <event-type>       Filter mesh stream by event type
-  --raw                     Print raw log chunks in mesh stream
+  --raw                      Print raw log chunks in mesh stream
   --drain-timeout <ms>      Override graceful drain wait for stop
   --shutdown-timeout <ms>   Override SIGTERM wait for stop
   --out <dir>               Output directory for podman:generate / launchd:generate
