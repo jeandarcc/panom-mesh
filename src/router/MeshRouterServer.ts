@@ -213,6 +213,25 @@ export class MeshRouterServer {
     const match = this.matcher.match(pathname, routable)
     if (!match) return null
 
+    // Anti-fallthrough guard: if the best match is a frontend catch-all route ('/'),
+    // check whether any configured non-frontend service has a more-specific route that
+    // also matches this path. If so, that service is intentionally responsible for this
+    // path and the catch-all should not steal it — return null (→ 503) so the client
+    // gets a clear "service unavailable" rather than a confusing frontend 404.
+    const matchedServiceConfig = this.options.config.services.get(match.service)
+    if (matchedServiceConfig?.type === 'frontend' && match.route === '/') {
+      for (const [, svc] of this.options.config.services) {
+        if (svc.type === 'frontend' || svc.type === 'worker') continue
+        for (const route of svc.routes) {
+          if (route === '/') continue
+          const normalizedRoute = route.endsWith('/') ? route.slice(0, -1) : route
+          if (pathname === normalizedRoute || pathname.startsWith(`${normalizedRoute}/`) || pathname.startsWith(`${normalizedRoute}?`)) {
+            return null
+          }
+        }
+      }
+    }
+
     const service = this.options.config.services.get(match.service)
     if (!service) return null
     const healthy = await this.registry.listHealthyByService(match.service)
