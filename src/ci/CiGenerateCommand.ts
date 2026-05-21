@@ -474,7 +474,7 @@ export class CiGenerateCommand {
       },
     },` : ''
 
-    return `const { defineMeshConfig } = require('@panomapp/mesh')
+    return `const { defineMeshConfig } = require('./generated_modules/panom-mesh/dist/index.cjs')
 
 const backendEnvKeys = ${envKeys}
 const backendImage = process.env.PANOM_BACKEND_IMAGE?.trim() || ${JSON.stringify(backendImageFallback)}
@@ -509,6 +509,7 @@ module.exports = defineMeshConfig({
     drainTimeoutMs: ${drainTimeoutMs},
     shutdownTimeoutMs: ${shutdownTimeoutMs},
     podman: {
+      podmanPath: process.env.PANOM_PODMAN_BIN?.trim() || '/usr/bin/podman',
       network: ${network},
       containerPrefix: ${containerPrefix},
       publishHost: ${publishHost},
