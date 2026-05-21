@@ -58,4 +58,35 @@ describe('MeshStateStore', () => {
     expect(rewritten).toContain('"instances"')
     expect(rewritten).not.toContain('trailing garbage')
   })
+
+  it('serializes concurrent upserts without losing records', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-state-'))
+    const store = new MeshStateStore('test-app', dir)
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) => store.upsert(record(`api-${index}`)))
+    )
+
+    const state = await store.read()
+    expect(state.instances).toHaveLength(20)
+    expect(new Set(state.instances.map(item => item.id)).size).toBe(20)
+
+    const written = await fs.promises.readFile(store.statePath, 'utf8')
+    expect(() => JSON.parse(written)).not.toThrow()
+  })
+
+  it('falls back to backup state when the primary state file is unreadable', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-state-'))
+    const store = new MeshStateStore('test-app', dir)
+    await store.upsert(record('api-a'))
+
+    await fs.promises.writeFile(store.statePath, '{"version":1,"app":"test-app","instances":[', 'utf8')
+
+    const recovered = await store.read()
+    expect(recovered.instances).toHaveLength(1)
+    expect(recovered.instances[0]?.id).toBe('api-a')
+
+    const rewritten = await fs.promises.readFile(store.statePath, 'utf8')
+    expect(() => JSON.parse(rewritten)).not.toThrow()
+  })
 })

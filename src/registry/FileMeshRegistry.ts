@@ -29,9 +29,6 @@ export class FileMeshRegistry implements MeshRegistry {
   public async list(options: MeshRegistryListOptions = {}): Promise<readonly MeshInstanceRecord[]> {
     const state = await this.store.read()
     const refreshed = state.instances.map(instance => RegistryRecordTools.markExpired(instance))
-    if (refreshed.some((instance, index) => instance !== state.instances[index])) {
-      await this.store.write(refreshed)
-    }
     return refreshed.filter(instance => {
       if (options.service && instance.service !== options.service) return false
       if (!options.includeExpired && instance.status === 'expired') return false

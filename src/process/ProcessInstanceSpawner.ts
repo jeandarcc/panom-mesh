@@ -25,7 +25,7 @@ export class ProcessInstanceSpawner {
 
   public async spawn(service: NormalizedMeshServiceConfig, index: number, totalInstances = service.instances): Promise<SpawnedMeshInstance> {
     const id = this.ids.createInstanceId(service.name)
-    if (service.type !== 'worker' && service.port !== undefined) {
+    if (service.type !== 'worker' && service.port !== undefined && index === 0) {
       await this.takeover.forceFreePort(service.port, { label: `${service.name} preferred port ${service.port}` })
     }
     const port = service.type === 'worker'

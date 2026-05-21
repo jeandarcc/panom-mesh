@@ -135,6 +135,45 @@ describe('MeshRouterServer', () => {
     expect(res.body).toContain('"cookie":null')
   })
 
+  it('keeps proxying when the primary registry state file becomes corrupted', async () => {
+    const projectRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-router-corrupt-state-'))
+    const stateDir = path.join(projectRoot, '.mesh')
+    const api = await listen((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ url: req.url, service: 'api' }))
+    })
+    cleanup.push(api.close)
+
+    const routerPort = await freePort()
+    const config = new MeshConfigNormalizer().normalize({
+      app: 'test-corrupt-state',
+      router: { port: routerPort, secret: 'test-secret-123' },
+      runtime: { stateDir, logsDir: path.join(stateDir, 'logs') },
+      services: {
+        api: {
+          command: 'node server.js',
+          route: '/api'
+        }
+      }
+    }, projectRoot, path.join(projectRoot, 'mesh.config.ts'))
+
+    const store = new MeshStateStore('test-corrupt-state', stateDir)
+    await store.upsert(record('api', '/api', api.port, process.pid))
+
+    const router = new MeshRouterServer({ config })
+    await router.listen()
+    cleanup.push(() => router.close())
+
+    const healthy = await request(routerPort, '/api/posts')
+    expect(healthy.status).toBe(200)
+
+    await fs.promises.writeFile(store.statePath, '{"version":1,"app":"test-corrupt-state","instances":[', 'utf8')
+
+    const degraded = await request(routerPort, '/api/posts?retry=1')
+    expect(degraded.status).toBe(200)
+    expect(degraded.body).toContain('/api/posts?retry=1')
+  })
+
   it('strips only mesh sticky cookie for backend services', async () => {
     const projectRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-router-backend-cookies-'))
     const stateDir = path.join(projectRoot, '.mesh')
