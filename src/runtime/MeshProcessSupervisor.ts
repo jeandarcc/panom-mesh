@@ -13,6 +13,7 @@ import type { MeshRegistry } from '../registry/types.js'
 import { sleep } from '../utils/time.js'
 import { MeshStreamFactory } from '../streaming/MeshStreamFactory.js'
 import type { MeshStreamPublisher } from '../streaming/types.js'
+import { ProcessRedisPreflight } from './ProcessRedisPreflight.js'
 
 interface ManagedChild {
   readonly record: MeshInstanceRecord
@@ -28,6 +29,7 @@ export class MeshProcessSupervisor {
   private readonly ids = new MeshIdFactory()
   private readonly streamPublisher: MeshStreamPublisher | null
   private readonly takeover = new ProcessTakeover()
+  private readonly redisPreflight = new ProcessRedisPreflight()
   private stopping = false
 
   public constructor(private readonly config: NormalizedMeshConfig) {
@@ -39,18 +41,26 @@ export class MeshProcessSupervisor {
 
   public async run(options: MeshRunOptions = {}): Promise<void> {
     const services = this.selectServices(options)
-    await this.reconcilePreexistingInstances(services, options)
-    for (const service of services) {
-      const count = options.instances ?? service.instances
+    const servicePlans = await this.redisPreflight.prepare(
+      services.map(service => ({
+        service,
+        count: options.instances ?? service.instances,
+      })),
+    )
+
+    await this.reconcilePreexistingInstances(servicePlans.map(plan => plan.service), options)
+    for (const plan of servicePlans) {
+      const service = plan.service
+      const count = plan.count
       for (let index = 0; index < count; index += 1) {
-        const managed = await this.registerManaged(await this.spawner.spawn(service, index))
+        const managed = await this.registerManaged(await this.spawner.spawn(service, index, count))
         this.children.set(managed.record.id, managed)
         this.bindExit(managed)
         if (options.watch ?? service.watch) this.pipeToConsole(managed)
       }
     }
 
-    if (this.shouldStartRouter(options, services)) {
+    if (this.shouldStartRouter(options, servicePlans.map(plan => plan.service))) {
       const router = await this.registerManaged(await this.spawnRouter(options.cliPath))
       this.children.set(router.record.id, router)
       this.bindExit(router)

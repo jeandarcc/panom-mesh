@@ -23,7 +23,7 @@ export class ProcessInstanceSpawner {
     private readonly streamPublisher: MeshStreamPublisher | null = null
   ) {}
 
-  public async spawn(service: NormalizedMeshServiceConfig, index: number): Promise<SpawnedMeshInstance> {
+  public async spawn(service: NormalizedMeshServiceConfig, index: number, totalInstances = service.instances): Promise<SpawnedMeshInstance> {
     const id = this.ids.createInstanceId(service.name)
     if (service.type !== 'worker' && service.port !== undefined) {
       await this.takeover.forceFreePort(service.port, { label: `${service.name} preferred port ${service.port}` })
@@ -33,7 +33,7 @@ export class ProcessInstanceSpawner {
       : await this.ports.reservePreferred(index === 0 ? service.port : undefined, service.portRange)
     const logFile = this.logStore.getLogPath(id)
     const logStream = await this.logStore.createStream(id)
-    const env = this.buildEnv(service, id, port, index)
+    const env = this.buildEnv(service, id, port, index, totalInstances)
     const [command, ...args] = service.command
 
     const child = spawn(command!, args, {
@@ -86,7 +86,8 @@ export class ProcessInstanceSpawner {
     service: NormalizedMeshServiceConfig,
     instanceId: string,
     port: number | null,
-    index: number
+    index: number,
+    totalInstances: number,
   ): NodeJS.ProcessEnv {
     return {
       ...process.env,
@@ -96,6 +97,8 @@ export class ProcessInstanceSpawner {
       MESH_SERVICE_TYPE: service.type,
       MESH_INSTANCE_ID: instanceId,
       MESH_INSTANCE_INDEX: String(index),
+      MESH_SERVICE_INSTANCES: String(totalInstances),
+      PANOM_API_INSTANCES: String(totalInstances),
       MESH_REGISTRY_TYPE: this.config.registry.type,
       MESH_REGISTRY_URL: this.config.registry.url,
       MESH_REGISTRY_TTL_MS: String(this.config.registry.ttlMs),
