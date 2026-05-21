@@ -289,13 +289,13 @@ async function listen(handler: http.RequestListener): Promise<{ port: number; cl
 }
 
 async function listenUpgrade(
-  upgradeHandler: (req: http.IncomingMessage, socket: net.Socket) => void
+  upgradeHandler: (req: http.IncomingMessage, socket: any) => void
 ): Promise<{ port: number; close: () => Promise<void> }> {
   const server = http.createServer((_req, res) => {
     res.statusCode = 200
     res.end('ok')
   })
-  server.on('upgrade', (req, socket) => upgradeHandler(req, socket))
+  server.on('upgrade', (req, socket) => upgradeHandler(req, socket as any))
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('missing test server address')

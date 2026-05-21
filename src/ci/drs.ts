@@ -88,14 +88,16 @@ export function getDrsWorkflowPlan(projectRoot: string, consumerCwd: string): Dr
       sourcePath: path.relative(projectRoot, absoluteLocalPath) || '.',
       generatedPath,
       installSpecifier: `file:./${generatedPath}`,
-      buildCommand: packageEntry.local.build,
+      // Only include buildCommand when it is explicitly defined to avoid
+      // assigning `undefined` to a present property (exactOptionalPropertyTypes).
+      ...(packageEntry.local.build !== undefined ? { buildCommand: packageEntry.local.build } : {}),
       dependencyNames: [],
     })
   }
 
   const sourcePackagesByName = new Map(sourcePackages.map(pkg => [pkg.name, pkg]))
   for (let index = 0; index < sourcePackages.length; index += 1) {
-    const sourcePackage = sourcePackages[index]
+    const sourcePackage = sourcePackages[index]!
     const packageJson = readPackageJson(path.resolve(projectRoot, sourcePackage.sourcePath), sourcePackage.name)
     sourcePackages[index] = {
       ...sourcePackage,
@@ -193,8 +195,10 @@ function rewriteDependencyBlock(
   for (const dependencyName of Object.keys(dependencies)) {
     const generatedDependency = generatedPackages.get(dependencyName)
     if (!generatedDependency) continue
+    const generatedPath = generatedDependency.generatedPath
+    if (!generatedPath) continue
     const consumerRoot = generatedPackageDir.split(`${path.sep}${GENERATED_MODULES_DIR}${path.sep}`)[0]
-    const targetDir = path.join(consumerRoot, generatedDependency.generatedPath)
+    const targetDir = path.join(String(consumerRoot), String(generatedPath))
     dependencies[dependencyName] = `file:${path.relative(generatedPackageDir, targetDir) || '.'}`
   }
 }
@@ -289,8 +293,15 @@ function loadDrsConfig(projectRoot: string): DrsConfigFile {
     throw new Error(`DRS config at ${configPath} must define consumers.`)
   }
 
+  if (raw.root !== undefined) {
+    return {
+      root: raw.root,
+      packages: raw.packages as Record<string, DrsPackageEntry>,
+      consumers: raw.consumers as Record<string, DrsConsumerEntry>,
+    }
+  }
+
   return {
-    root: raw.root,
     packages: raw.packages as Record<string, DrsPackageEntry>,
     consumers: raw.consumers as Record<string, DrsConsumerEntry>,
   }
