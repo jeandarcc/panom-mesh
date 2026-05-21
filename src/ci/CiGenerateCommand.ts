@@ -251,7 +251,7 @@ export class CiGenerateCommand {
       '          DEPLOY_USER: ' + this.ghaSecret('DEPLOY_USER'),
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       "        run: |",
-      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<\'EOF\'',
+      '          ssh -t -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<\'EOF\'',
       '            set -e',
       '            TARGET_NGINX_PATH="/etc/nginx/conf.d/panom.conf"',
       '            if [ -f "${TARGET_NGINX_PATH}" ]; then',
@@ -268,7 +268,7 @@ export class CiGenerateCommand {
       '              sudo nginx -t',
       '              exit 1',
       '            fi',
-      '          EOF',
+      'EOF',
       '',
     ].join('\n')
   }
@@ -370,7 +370,7 @@ export class CiGenerateCommand {
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       '        run: |',
       '          IMAGE="$FRONTEND_IMAGE"',
-      '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s -- \'$IMAGE\'" <<\'EOF\'',
+      '          ssh -t -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s -- \'$IMAGE\'" <<\'EOF\'',
       '          set -euo pipefail',
       '          IMAGE="$1"',
       '          podman stop panom-frontend >/dev/null 2>&1 || true',
@@ -381,7 +381,7 @@ export class CiGenerateCommand {
       '            --name panom-frontend \\',
       '            "${IMAGE}"',
       '          echo "[deploy] Frontend is UP."',
-      '          EOF',
+          'EOF',
       '',
     ].join('\n')
   }
@@ -1040,7 +1040,7 @@ module.exports = defineMeshConfig({
       '',
       '            [Install]',
       '            WantedBy=default.target',
-      '            UNIT',
+      'UNIT',
       '',
       '            systemctl --user stop panom-backend-mesh.service >/dev/null 2>&1 || true',
       '            podman stop panom >/dev/null 2>&1 || true',
@@ -1071,7 +1071,7 @@ module.exports = defineMeshConfig({
       '            fi',
       '',
       '            systemctl --user --no-pager --full status panom-backend-mesh.service',
-      '          EOF',
+      'EOF',
       '',
     ].join('\n')
   }
