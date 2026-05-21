@@ -108,6 +108,18 @@ export class MeshRouterServer {
         return
       }
 
+      // Defense-in-depth: reject obvious reverse-proxy loops detected via X-Forwarded-For depth.
+      // Any client that has already been forwarded by more than 8 hops before reaching the mesh
+      // router is almost certainly stuck in a self-referencing proxy chain. We respond with
+      // 508 Loop Detected so the loop is broken immediately instead of compounding load.
+      const xffIncoming = req.headers['x-forwarded-for']
+      const xffStr = Array.isArray(xffIncoming) ? xffIncoming.join(',') : (typeof xffIncoming === 'string' ? xffIncoming : '')
+      const xffHops = xffStr ? xffStr.split(',').length : 0
+      if (xffHops > 8) {
+        this.respond(res, 508, { error: 'mesh_loop_detected', message: `Refusing to forward a request that has already traversed ${xffHops} proxies.`, requestId })
+        return
+      }
+
       const routed = await this.selectTarget(url.pathname, req)
       if (!routed) {
         this.metrics.recordNoTarget()
