@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { applyMeshenv, resetMeshenvCache } from '../src/config/meshEnv.js'
+import { applyMeshenv, getMeshenv, resetMeshenvCache } from '../src/config/meshEnv.js'
 import { MeshConfigLoader } from '../src/config/MeshConfigLoader.js'
 import { parseEnvFile, readEnvFile, resolveMeshenvPath } from '../src/utils/envFile.js'
 
@@ -50,5 +50,17 @@ describe('meshEnv', () => {
 
     await new MeshConfigLoader().load(undefined, dir)
     expect(process.env.CORS_ALLOWED_ORIGINS).toBe('https://meshenv.test')
+  })
+
+  it('re-reads .meshenv from disk on getMeshenv after applyMeshenv', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-meshenv-'))
+    const meshenvPath = path.join(dir, '.meshenv')
+    fs.writeFileSync(meshenvPath, 'ADMIN_CONSOLE_ENABLED=false\n', 'utf8')
+
+    applyMeshenv(dir)
+    expect(getMeshenv().ADMIN_CONSOLE_ENABLED).toBe('false')
+
+    fs.writeFileSync(meshenvPath, 'ADMIN_CONSOLE_ENABLED=true\n', 'utf8')
+    expect(getMeshenv().ADMIN_CONSOLE_ENABLED).toBe('true')
   })
 })

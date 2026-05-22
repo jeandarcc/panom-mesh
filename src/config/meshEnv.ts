@@ -16,7 +16,6 @@ export function applyMeshenv(projectRoot: string): Record<string, string> {
 }
 
 export function getMeshenv(): Record<string, string> {
-  if (cachedMeshenv) return cachedMeshenv
   if (cachedProjectRoot) return loadMeshenvFile(cachedProjectRoot)
   return loadMeshenvFile(process.cwd())
 }
