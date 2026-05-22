@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../utils/fs.js'
-import { getDrsPackageEntry, getDrsWorkflowPlan, syncDrsGeneratedModules } from './drs.js'
+import { getDrsPackageEntry, getDrsWorkflowPlan } from './drs.js'
 import type {
   NormalizedMeshConfig,
   NormalizedMeshServiceConfig,
@@ -31,10 +31,6 @@ export class CiGenerateCommand {
   public async generate(options: MeshCiGenerateOptions = {}): Promise<string> {
     const artifacts = this.buildArtifacts(options.service)
 
-    if (this.config.ci.drs.enabled) {
-      await this.syncGeneratedModules(options.service)
-    }
-
     await this.syncGeneratedRuntimeBundles(options.service)
 
     if (options.print) {
@@ -53,23 +49,6 @@ export class CiGenerateCommand {
       lines.push(`  ${path.join(artifact.repoDir, '.github', 'workflows', artifact.name)}`)
     }
     return `${lines.join('\n')}\n`
-  }
-
-  private async syncGeneratedModules(onlyService?: string): Promise<void> {
-    const serviceCwds = new Set<string>()
-
-    for (const group of this.groupByCwd(onlyService)) {
-      const hasDeployableService = group.services.some(
-        s => s.type === 'frontend' || s.type === 'backend' || s.type === 'worker'
-      )
-      if (hasDeployableService) {
-        serviceCwds.add(group.cwd)
-      }
-    }
-
-    for (const cwd of serviceCwds) {
-      await syncDrsGeneratedModules(this.config.projectRoot, cwd)
-    }
   }
 
   private async syncGeneratedRuntimeBundles(onlyService?: string): Promise<void> {
