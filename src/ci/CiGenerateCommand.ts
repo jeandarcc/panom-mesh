@@ -26,6 +26,8 @@ interface ServiceGroup {
 const RUNTIME_BUNDLE_DIR = path.join('.mesh', 'runtime-bundle')
 const RUNTIME_BUNDLE_COPY_EXCLUDES = new Set(['.git', 'node_modules', 'dist', '.turbo', '.next', '.DS_Store'])
 
+type DrsWorkflowPlan = ReturnType<typeof getDrsWorkflowPlan>
+
 export class CiGenerateCommand {
   public constructor(private readonly config: NormalizedMeshConfig) {}
 
@@ -140,19 +142,44 @@ export class CiGenerateCommand {
     return getDrsWorkflowPlan(this.config.projectRoot, svc.cwd)
   }
 
-  private drsBootstrapSteps(plan: ReturnType<typeof getDrsWorkflowPlan>): string[] {
+  private runtimeMeshDrsPlan(apiSvc: NormalizedMeshServiceConfig): DrsWorkflowPlan {
+    return getDrsWorkflowPlan(this.config.projectRoot, path.join(apiSvc.cwd, RUNTIME_BUNDLE_DIR))
+  }
+
+  private drsBootstrapSteps(plan: DrsWorkflowPlan, workingDirectoryPrefix = ''): string[] {
     const steps: string[] = []
 
     for (const sourcePackage of plan.sourcePackages) {
+      const workingDirectory = workingDirectoryPrefix
+        ? path.posix.join(workingDirectoryPrefix, sourcePackage.generatedPath)
+        : sourcePackage.generatedPath
       steps.push(
         '      - name: Prepare ' + sourcePackage.name + ' source',
-        '        working-directory: ' + sourcePackage.generatedPath,
+        '        working-directory: ' + workingDirectory,
         '        run: |',
           '          npm install',
           '          ' + (sourcePackage.buildCommand ?? 'npm run build'),
         '',
       )
     }
+
+    return steps
+  }
+
+  private runtimeMeshBootstrapSteps(apiSvc: NormalizedMeshServiceConfig): string[] {
+    const plan = this.runtimeMeshDrsPlan(apiSvc)
+    const steps = this.drsBootstrapSteps(plan, RUNTIME_BUNDLE_DIR)
+    const meshWorkingDir = path.posix.join(RUNTIME_BUNDLE_DIR, 'generated_modules/panom-mesh')
+
+    steps.push(
+      '      - name: Finalize @panomapp/mesh mesh runtime',
+      '        working-directory: ' + meshWorkingDir,
+      '        run: |',
+      '          npm prune --omit=dev',
+      '          rm -rf src tests examples docs',
+      '          rm -f tsconfig.json tsup.config.ts package-lock.json',
+      '',
+    )
 
     return steps
   }
@@ -391,6 +418,52 @@ export class CiGenerateCommand {
     workerSvc: NormalizedMeshServiceConfig | undefined,
   ): Promise<void> {
     const runtimeBundleDir = path.join(apiSvc.cwd, RUNTIME_BUNDLE_DIR)
+
+    await fs.promises.rm(runtimeBundleDir, { recursive: true, force: true })
+
+    if (this.config.ci.drs.enabled) {
+      await this.syncRuntimeBundleFromDrsPlan(apiSvc, runtimeBundleDir)
+    } else {
+      await this.syncRuntimeBundleMeshOnly(apiSvc, runtimeBundleDir)
+    }
+
+    await fs.promises.writeFile(
+      path.join(runtimeBundleDir, 'mesh.config.cjs'),
+      this.renderBackendRuntimeMeshConfig(apiSvc, workerSvc),
+      'utf8',
+    )
+  }
+
+  private async syncRuntimeBundleFromDrsPlan(
+    apiSvc: NormalizedMeshServiceConfig,
+    runtimeBundleDir: string,
+  ): Promise<void> {
+    const plan = this.runtimeMeshDrsPlan(apiSvc)
+
+    for (const sourcePackage of plan.sourcePackages) {
+      const sourceDir = path.resolve(this.config.projectRoot, sourcePackage.sourcePath)
+      const targetDir = path.join(runtimeBundleDir, 'generated_modules', path.basename(sourcePackage.sourcePath))
+
+      if (!fs.existsSync(sourceDir)) {
+        throw new Error(`Mesh runtime DRS package "${sourcePackage.name}" source is missing: ${sourceDir}`)
+      }
+
+      await ensureDir(path.dirname(targetDir))
+      await fs.promises.cp(sourceDir, targetDir, {
+        recursive: true,
+        filter: source => {
+          const entryName = path.basename(source)
+          return !RUNTIME_BUNDLE_COPY_EXCLUDES.has(entryName) && !entryName.startsWith('._')
+        },
+      })
+      await this.pruneGeneratedRuntimeNoise(targetDir)
+    }
+  }
+
+  private async syncRuntimeBundleMeshOnly(
+    apiSvc: NormalizedMeshServiceConfig,
+    runtimeBundleDir: string,
+  ): Promise<void> {
     const generatedModulesDir = path.join(runtimeBundleDir, 'generated_modules')
     const meshPackage = getDrsPackageEntry(this.config.projectRoot, '@panomapp/mesh')
     if (meshPackage.prebuilt !== true) {
@@ -404,7 +477,6 @@ export class CiGenerateCommand {
       throw new Error(`Mesh runtime source package is missing: ${meshSourceDir}`)
     }
 
-    await fs.promises.rm(runtimeBundleDir, { recursive: true, force: true })
     await ensureDir(generatedModulesDir)
     await fs.promises.cp(meshSourceDir, generatedMeshDir, {
       recursive: true,
@@ -415,11 +487,6 @@ export class CiGenerateCommand {
     })
 
     await this.pruneGeneratedRuntimeNoise(generatedMeshDir)
-    await fs.promises.writeFile(
-      path.join(runtimeBundleDir, 'mesh.config.cjs'),
-      this.renderBackendRuntimeMeshConfig(apiSvc, workerSvc),
-      'utf8',
-    )
   }
 
   private async pruneGeneratedRuntimeNoise(dir: string): Promise<void> {
@@ -859,15 +926,19 @@ module.exports = defineMeshConfig({
       '        uses: actions/checkout@v4',
       '',
       ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
-      '      - name: Prepare @panomapp/mesh prebuilt runtime',
-        '        working-directory: .mesh/runtime-bundle/generated_modules/panom-mesh',
-        '        run: |',
+      ...(ci.drs.enabled
+        ? this.runtimeMeshBootstrapSteps(apiSvc)
+        : [
+          '      - name: Prepare @panomapp/mesh prebuilt runtime',
+          '        working-directory: .mesh/runtime-bundle/generated_modules/panom-mesh',
+          '        run: |',
           '          npm install',
           '          npm run build',
           '          npm prune --omit=dev',
           '          rm -rf src tests examples docs',
           '          rm -f tsconfig.json tsup.config.ts package-lock.json',
-        '',
+          '',
+        ]),
     ]
 
     const setupNodeStep = [

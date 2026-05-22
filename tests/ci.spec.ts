@@ -54,6 +54,17 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
         },
       })
 
+      writeLocalPackage(root, 'panom-drs', {
+        name: '@panomapp/drs',
+        version: '1.2.0',
+        scripts: {
+          build: 'echo build',
+        },
+        dependencies: {
+          zod: '^3.24.2',
+        },
+      })
+
       writeLocalPackage(root, 'panom-mesh', {
         name: '@panomapp/mesh',
         version: '1.0.0',
@@ -61,6 +72,7 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
           build: 'echo build',
         },
         dependencies: {
+          '@panomapp/drs': 'file:../panom-drs',
           jiti: '^2.4.2',
         },
       })
@@ -107,10 +119,16 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
           registry: { version: '^0.1.0' },
         },
         '@panomapp/mesh': {
-          to: ['panom-backend'],
+          to: ['panom-backend', 'panom-backend/.mesh/runtime-bundle'],
           prebuilt: true,
           local: { path: 'panom-mesh', build: 'npm run build' },
           registry: { version: '^1.0.0' },
+        },
+        '@panomapp/drs': {
+          to: ['panom-backend/.mesh/runtime-bundle'],
+          prebuilt: true,
+          local: { path: 'panom-drs', build: 'npm run build' },
+          registry: { version: '^1.2.0' },
         },
       },
       consumers: {
@@ -131,6 +149,10 @@ function writeDrsConfig(root: string, consumerDir = 'panom-frontend'): void {
             '@panomapp/subdomain-policy',
             '@panomapp/arc',
           ],
+        },
+        'mesh-runtime': {
+          dir: 'panom-backend/.mesh/runtime-bundle',
+          dependencies: ['@panomapp/drs', '@panomapp/mesh'],
         },
       },
     }, null, 2),
@@ -341,7 +363,10 @@ describe('Mesh CI generation', () => {
 
     const output = await new CiGenerateCommand(config).generate({ print: true })
 
-    expect(output).toContain('Prepare @panomapp/mesh prebuilt runtime')
+    expect(output).toContain('Prepare @panomapp/drs source')
+    expect(output).toContain('.mesh/runtime-bundle/generated_modules/panom-drs')
+    expect(output).toContain('Prepare @panomapp/mesh source')
+    expect(output).toContain('Finalize @panomapp/mesh mesh runtime')
     expect(output).toContain('panom-backend-mesh.service')
     expect(output).toContain('dist/cli/index.cjs')
     expect(output).toContain('NODE_MAJOR')
@@ -352,6 +377,7 @@ describe('Mesh CI generation', () => {
     expect(output).not.toContain('npm run mesh:start')
     expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'mesh.config.cjs'))).toBe(true)
     expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'generated_modules', 'panom-mesh', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'generated_modules', 'panom-drs', 'package.json'))).toBe(true)
     const runtimeConfig = fs.readFileSync(path.join(root, 'panom-backend', '.mesh', 'runtime-bundle', 'mesh.config.cjs'), 'utf8')
     expect(runtimeConfig).toContain("port: 31000")
     expect(runtimeConfig).toContain("instances: 2")
