@@ -99,6 +99,7 @@ export interface MeshRouterConfig {
   readonly secureCookies?: boolean
   readonly drainTimeoutMs?: number
   readonly socketDrainTimeoutMs?: number
+  readonly errorPagesDir?: string
   readonly tls?: MeshRouterTlsConfig
 }
 
@@ -334,6 +335,7 @@ export interface NormalizedMeshRouterConfig {
   readonly secureCookies: boolean
   readonly drainTimeoutMs: number
   readonly socketDrainTimeoutMs: number
+  readonly errorPagesDir?: string
   readonly protocol: 'http' | 'https'
   readonly publicOrigin: string
   readonly publicOrigins: readonly string[]

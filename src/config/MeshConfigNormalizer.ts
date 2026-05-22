@@ -287,6 +287,9 @@ export class MeshConfigNormalizer {
     const protocol = tlsEnabled ? 'https' as const : 'http' as const
     const publicPorts = [port, ...additionalPorts]
     const canonicalPort = tlsEnabled && publicPorts.includes(443) ? 443 : port
+    const errorPagesDir = router.errorPagesDir
+      ? path.resolve(projectRoot, router.errorPagesDir)
+      : undefined
     return {
       enabled: router.enabled ?? true,
       host: router.host ?? '127.0.0.1',
@@ -298,6 +301,7 @@ export class MeshConfigNormalizer {
       secureCookies: router.secureCookies ?? tlsEnabled,
       drainTimeoutMs: router.drainTimeoutMs ?? 15_000,
       socketDrainTimeoutMs: router.socketDrainTimeoutMs ?? 10_000,
+      ...(errorPagesDir ? { errorPagesDir } : {}),
       protocol,
       publicOrigin: formatOrigin(protocol, router.host ?? '127.0.0.1', canonicalPort),
       publicOrigins: publicPorts.map((listenPort) => formatOrigin(protocol, router.host ?? '127.0.0.1', listenPort)),

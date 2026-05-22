@@ -12,6 +12,7 @@ import { RouteMatcher } from './RouteMatcher.js'
 import { StickySession } from './StickySession.js'
 import { RouterMetrics } from '../observability/RouterMetrics.js'
 import { formatOrigin } from '../utils/origin.js'
+import { ErrorPageServer } from './ErrorPageServer.js'
 
 export interface MeshRouterServerOptions {
   readonly config: NormalizedMeshConfig
@@ -32,6 +33,7 @@ export class MeshRouterServer {
   private readonly tracker = new ActiveConnectionTracker()
   private readonly metrics = new RouterMetrics()
   private readonly instanceService = new Map<string, string>()
+  private readonly errorPages: ErrorPageServer
   private closed = false
   private draining = false
 
@@ -42,6 +44,7 @@ export class MeshRouterServer {
       secret: options.config.router.secret,
       secure: options.config.router.secureCookies
     }))
+    this.errorPages = new ErrorPageServer(options.config.router.errorPagesDir)
     this.servers = this.createServers()
   }
 
@@ -103,6 +106,7 @@ export class MeshRouterServer {
     try {
       const url = new URL(req.url ?? '/', `${forwardedProto}://${req.headers.host ?? 'localhost'}`)
       if (this.handleManagement(url, req, res)) return
+      if (this.errorPages.tryServe(url.pathname, res)) return
       if (this.draining) {
         this.respond(res, 503, { error: 'mesh_router_draining', requestId })
         return
@@ -123,6 +127,13 @@ export class MeshRouterServer {
       const routed = await this.selectTarget(url.pathname, req)
       if (!routed) {
         this.metrics.recordNoTarget()
+        if (this.errorPages.serveMeshNoTarget(req, res, {
+          pathname: url.pathname,
+          requestId,
+          attemptedUrl: url.toString(),
+        })) {
+          return
+        }
         this.respond(res, 503, { error: 'mesh_no_target', requestId })
         return
       }
