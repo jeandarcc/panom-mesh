@@ -13,6 +13,7 @@ import { StickySession } from './StickySession.js'
 import { RouterMetrics } from '../observability/RouterMetrics.js'
 import { formatOrigin } from '../utils/origin.js'
 import { ErrorPageServer } from './ErrorPageServer.js'
+import { sleep } from '../utils/time.js'
 
 export interface MeshRouterServerOptions {
   readonly config: NormalizedMeshConfig
@@ -108,6 +109,13 @@ export class MeshRouterServer {
       if (this.handleManagement(url, req, res)) return
       if (this.errorPages.tryServe(url.pathname, res)) return
       if (this.draining) {
+        if (this.errorPages.serveMeshRouterDraining(req, res, {
+          pathname: url.pathname,
+          requestId,
+          attemptedUrl: url.toString(),
+        })) {
+          return
+        }
         this.respond(res, 503, { error: 'mesh_router_draining', requestId })
         return
       }
@@ -124,7 +132,7 @@ export class MeshRouterServer {
         return
       }
 
-      const routed = await this.selectTarget(url.pathname, req)
+      const routed = await this.selectTargetWithRetry(url.pathname, req)
       if (!routed) {
         this.metrics.recordNoTarget()
         if (this.errorPages.serveMeshNoTarget(req, res, {
@@ -134,6 +142,7 @@ export class MeshRouterServer {
         })) {
           return
         }
+        res.setHeader('retry-after', '1')
         this.respond(res, 503, { error: 'mesh_no_target', requestId })
         return
       }
@@ -164,10 +173,10 @@ export class MeshRouterServer {
     try {
       const forwardedProto = this.protocolForSocket(req.socket)
       const url = new URL(req.url ?? '/', `${forwardedProto}://${req.headers.host ?? 'localhost'}`)
-      const routed = await this.selectTarget(url.pathname, req)
+      const routed = await this.selectTargetWithRetry(url.pathname, req)
       if (!routed) {
         this.metrics.recordNoTarget()
-        socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nConnection: close\r\n\r\n')
         socket.destroy()
         return
       }
@@ -217,6 +226,18 @@ export class MeshRouterServer {
       socket.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
       socket.destroy()
     }
+  }
+
+  private async selectTargetWithRetry(pathname: string, req: IncomingMessage): Promise<{ instance: import('../core/types.js').MeshInstanceRecord; service: string; target: URL; setCookie?: string } | null> {
+    const { attempts, delayMs } = this.options.config.router.targetRetry
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const routed = await this.selectTarget(pathname, req)
+      if (routed) return routed
+      if (attempt < attempts - 1) {
+        await sleep(delayMs * (attempt + 1))
+      }
+    }
+    return null
   }
 
   private async selectTarget(pathname: string, req: IncomingMessage): Promise<{ instance: import('../core/types.js').MeshInstanceRecord; service: string; target: URL; setCookie?: string } | null> {

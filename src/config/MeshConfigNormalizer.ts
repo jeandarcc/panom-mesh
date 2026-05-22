@@ -290,6 +290,8 @@ export class MeshConfigNormalizer {
     const errorPagesDir = router.errorPagesDir
       ? path.resolve(projectRoot, router.errorPagesDir)
       : undefined
+    const health = router.health ?? {}
+    const targetRetry = router.targetRetry ?? {}
     return {
       enabled: router.enabled ?? true,
       host: router.host ?? '127.0.0.1',
@@ -301,6 +303,17 @@ export class MeshConfigNormalizer {
       secureCookies: router.secureCookies ?? tlsEnabled,
       drainTimeoutMs: router.drainTimeoutMs ?? 15_000,
       socketDrainTimeoutMs: router.socketDrainTimeoutMs ?? 10_000,
+      health: {
+        checkTimeoutMs: health.checkTimeoutMs ?? 3_000,
+        cacheMs: health.cacheMs ?? 5_000,
+        failureThreshold: health.failureThreshold ?? 3,
+        staleGraceMs: health.staleGraceMs ?? 10_000,
+        startingGraceMs: health.startingGraceMs ?? 30_000,
+      },
+      targetRetry: {
+        attempts: targetRetry.attempts ?? 3,
+        delayMs: targetRetry.delayMs ?? 150,
+      },
       ...(errorPagesDir ? { errorPagesDir } : {}),
       protocol,
       publicOrigin: formatOrigin(protocol, router.host ?? '127.0.0.1', canonicalPort),

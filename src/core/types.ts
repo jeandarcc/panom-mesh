@@ -88,6 +88,19 @@ export interface MeshPortRange {
   readonly to: number
 }
 
+export interface MeshRouterHealthConfig {
+  readonly checkTimeoutMs?: number
+  readonly cacheMs?: number
+  readonly failureThreshold?: number
+  readonly staleGraceMs?: number
+  readonly startingGraceMs?: number
+}
+
+export interface MeshRouterTargetRetryConfig {
+  readonly attempts?: number
+  readonly delayMs?: number
+}
+
 export interface MeshRouterConfig {
   readonly enabled?: boolean
   readonly host?: string
@@ -100,6 +113,8 @@ export interface MeshRouterConfig {
   readonly drainTimeoutMs?: number
   readonly socketDrainTimeoutMs?: number
   readonly errorPagesDir?: string
+  readonly health?: MeshRouterHealthConfig
+  readonly targetRetry?: MeshRouterTargetRetryConfig
   readonly tls?: MeshRouterTlsConfig
 }
 
@@ -324,6 +339,19 @@ export interface NormalizedMeshStreamingConfig {
   readonly connectTimeoutMs: number
 }
 
+export interface NormalizedMeshRouterHealthConfig {
+  readonly checkTimeoutMs: number
+  readonly cacheMs: number
+  readonly failureThreshold: number
+  readonly staleGraceMs: number
+  readonly startingGraceMs: number
+}
+
+export interface NormalizedMeshRouterTargetRetryConfig {
+  readonly attempts: number
+  readonly delayMs: number
+}
+
 export interface NormalizedMeshRouterConfig {
   readonly enabled: boolean
   readonly host: string
@@ -336,6 +364,8 @@ export interface NormalizedMeshRouterConfig {
   readonly drainTimeoutMs: number
   readonly socketDrainTimeoutMs: number
   readonly errorPagesDir?: string
+  readonly health: NormalizedMeshRouterHealthConfig
+  readonly targetRetry: NormalizedMeshRouterTargetRetryConfig
   readonly protocol: 'http' | 'https'
   readonly publicOrigin: string
   readonly publicOrigins: readonly string[]

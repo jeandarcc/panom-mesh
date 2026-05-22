@@ -30,10 +30,23 @@ export class ErrorPageServer {
   }
 
   public serveMeshNoTarget(req: IncomingMessage, res: ServerResponse, context: MeshNoTargetContext): boolean {
+    return this.serveMeshIncident(req, res, 'mesh-no-target.html', context)
+  }
+
+  public serveMeshRouterDraining(req: IncomingMessage, res: ServerResponse, context: MeshNoTargetContext): boolean {
+    return this.serveMeshIncident(req, res, 'mesh-router-draining.html', context)
+  }
+
+  private serveMeshIncident(
+    req: IncomingMessage,
+    res: ServerResponse,
+    templateFile: string,
+    context: MeshNoTargetContext
+  ): boolean {
     if (!this.errorPagesDir) return false
     if (!this.wantsHtml(req)) return false
 
-    const templatePath = path.join(this.errorPagesDir, 'mesh-no-target.html')
+    const templatePath = path.join(this.errorPagesDir, templateFile)
     if (!fs.existsSync(templatePath)) return false
 
     const proto = this.forwardedProto(req)
