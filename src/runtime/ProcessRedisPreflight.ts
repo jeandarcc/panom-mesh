@@ -1,9 +1,17 @@
 import process from 'node:process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
+
+function getModuleRequire() {
+  if (typeof __filename !== 'undefined') {
+    return createRequire(__filename)
+  }
+  return createRequire(fileURLToPath(import.meta.url))
+}
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { createInterface } from 'node:readline/promises'
 import type { NormalizedMeshServiceConfig } from '../core/types.js'
 import { SimpleRedisClient } from '../registry/redis/SimpleRedisClient.js'
 import { sleep } from '../utils/time.js'
@@ -181,6 +189,7 @@ export class ProcessRedisPreflight {
   private async promptForInstall(): Promise<boolean> {
     if (!process.stdin.isTTY || !process.stdout.isTTY) return false
 
+    const { createInterface } = getModuleRequire()('node:readline/promises') as typeof import('node:readline/promises')
     const rl = createInterface({
       input: process.stdin,
       output: process.stdout,

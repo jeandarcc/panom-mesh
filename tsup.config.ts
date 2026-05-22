@@ -26,8 +26,13 @@ export default defineConfig({
   sourcemap: true,
   splitting: false,
   target: 'node20',
+  platform: 'node',
   shims: false,
   banner: {
     js: ''
-  }
+  },
+  esbuildOptions(options) {
+    // Keep node: built-ins external so bundled CLI works on the server (readline/promises, etc.).
+    options.packages = 'external'
+  },
 })

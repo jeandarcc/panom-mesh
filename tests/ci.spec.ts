@@ -343,6 +343,9 @@ describe('Mesh CI generation', () => {
 
     expect(output).toContain('Prepare @panomapp/mesh prebuilt runtime')
     expect(output).toContain('panom-backend-mesh.service')
+    expect(output).toContain('dist/cli/index.cjs')
+    expect(output).toContain('NODE_MAJOR')
+    expect(output).toContain('Node 20+ is required')
     expect(output).toContain('ExecStart=${NODE_BIN}')
     expect(output).toContain('Upload backend mesh runtime bundle')
     expect(output).toContain('http://127.0.0.1:8080/health')
