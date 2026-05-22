@@ -25,6 +25,9 @@ interface ServiceGroup {
 
 const RUNTIME_BUNDLE_DIR = path.join('.mesh', 'runtime-bundle')
 const RUNTIME_BUNDLE_COPY_EXCLUDES = new Set(['.git', 'node_modules', 'dist', '.turbo', '.next', '.DS_Store'])
+const GHA_CHECKOUT_ACTION = 'actions/checkout@v6'
+const GHA_SETUP_NODE_ACTION = 'actions/setup-node@v6'
+const CI_NODE_VERSION = '24'
 /** Deploy SSH health poll: attempts × sleepSec ≈ max wait before CI fails (cold pull + 2× API + router). */
 const DEPLOY_HEALTH_ATTEMPTS = 25
 const DEPLOY_HEALTH_SLEEP_SEC = 3
@@ -203,15 +206,15 @@ export class CiGenerateCommand {
     const installCommand = this.frontendInstallCommand(ci, plan)
     const checkoutStep = [
       '      - name: Checkout',
-      '        uses: actions/checkout@v4',
+      `        uses: ${GHA_CHECKOUT_ACTION}`,
       '',
       ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
     const setupNodeStep = [
       '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
+      '        uses: ' + GHA_SETUP_NODE_ACTION,
       '        with:',
-      '          node-version: 20',
+      '          node-version: ' + CI_NODE_VERSION,
       '          cache: npm',
       ...(ci.drs.enabled ? ['          cache-dependency-path: package-lock.json'] : []),
       '',
@@ -316,15 +319,15 @@ export class CiGenerateCommand {
     const dockerfilePath = 'Dockerfile'
     const checkoutSteps = [
       '      - name: Checkout',
-      '        uses: actions/checkout@v4',
+      `        uses: ${GHA_CHECKOUT_ACTION}`,
       '',
       ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
     const setupNodeStep = [
       '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
+      '        uses: ' + GHA_SETUP_NODE_ACTION,
       '        with:',
-      '          node-version: 20',
+      '          node-version: ' + CI_NODE_VERSION,
       '          cache: npm',
       ...(ci.drs.enabled ? ['          cache-dependency-path: package-lock.json'] : []),
       '',
@@ -691,16 +694,16 @@ module.exports = defineMeshConfig({
 
     const checkoutSteps = [
       '      - name: Checkout',
-      '        uses: actions/checkout@v4',
+      `        uses: ${GHA_CHECKOUT_ACTION}`,
       '',
       ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
 
     const setupNodeStep = [
       '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
+      '        uses: ' + GHA_SETUP_NODE_ACTION,
       '        with:',
-      '          node-version: 20',
+      '          node-version: ' + CI_NODE_VERSION,
       '          cache: npm',
       ...(ci.drs.enabled ? ['          cache-dependency-path: package-lock.json'] : []),
       '',
@@ -926,7 +929,7 @@ module.exports = defineMeshConfig({
 
     const checkoutSteps = [
       '      - name: Checkout',
-      '        uses: actions/checkout@v4',
+      `        uses: ${GHA_CHECKOUT_ACTION}`,
       '',
       ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
       ...(ci.drs.enabled
@@ -946,9 +949,9 @@ module.exports = defineMeshConfig({
 
     const setupNodeStep = [
       '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
+      '        uses: ' + GHA_SETUP_NODE_ACTION,
       '        with:',
-      '          node-version: 20',
+      '          node-version: ' + CI_NODE_VERSION,
       '          cache: npm',
       ...(ci.drs.enabled ? ['          cache-dependency-path: package-lock.json'] : []),
       '',
@@ -1205,16 +1208,16 @@ module.exports = defineMeshConfig({
     const envSecretsLines = secrets.map(k => '          ' + k + ': ' + this.ghaSecret(k)).join('\n')
     const checkoutSteps = [
       '      - name: Checkout',
-      '        uses: actions/checkout@v4',
+      `        uses: ${GHA_CHECKOUT_ACTION}`,
       '',
       ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
 
     const setupNodeStep = [
       '      - name: Setup Node',
-      '        uses: actions/setup-node@v4',
+      '        uses: ' + GHA_SETUP_NODE_ACTION,
       '        with:',
-      '          node-version: 20',
+      '          node-version: ' + CI_NODE_VERSION,
       '          cache: npm',
       ...(ci.drs.enabled ? ['          cache-dependency-path: package-lock.json'] : []),
       '',

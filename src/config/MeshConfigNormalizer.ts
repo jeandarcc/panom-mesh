@@ -469,7 +469,7 @@ export class MeshConfigNormalizer {
       return [...keys].sort()
     }
 
-    const nodeMajor = ci.docker?.nodeMajor ?? 20
+    const nodeMajor = ci.docker?.nodeMajor ?? 24
     const nodeVariant = ci.docker?.nodeVariant ?? 'bookworm-slim'
     const systemPackages = ci.docker?.backend?.systemPackages ?? ['openssl']
 
