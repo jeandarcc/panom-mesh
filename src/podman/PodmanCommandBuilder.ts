@@ -1,4 +1,5 @@
 import type { MeshInstanceRecord, NormalizedMeshConfig, NormalizedMeshServiceConfig } from '../core/types.js'
+import { getMeshenv } from '../config/meshEnv.js'
 
 export interface PodmanContainerSpec {
   readonly id: string
@@ -106,6 +107,7 @@ export class PodmanCommandBuilder {
   private buildEnv(spec: PodmanContainerSpec): Record<string, string> {
     const service = spec.service
     return {
+      ...getMeshenv(),
       ...service.env,
       ...service.podman.env,
       MESH_APP: this.config.app,

@@ -11,11 +11,24 @@ export class InitCommand {
       await fs.promises.writeFile(configPath, this.configTemplate(), 'utf8')
     }
 
+    const meshenvExamplePath = path.join(projectRoot, '.meshenv.example')
+    if (!(await pathExists(meshenvExamplePath))) {
+      await fs.promises.writeFile(meshenvExamplePath, this.meshenvExampleTemplate(), 'utf8')
+    }
+
     if (await pathExists(packagePath)) {
       await this.patchPackageJson(packagePath)
     }
 
-    return `Mesh initialized.\n\nCreated or verified:\n- mesh.config.ts\n- package.json scripts\n\nRun:\n  npm run mesh:run\n  npm run mesh:run:all\n  npm run mesh:ps\n  npm run mesh:dashboard\n`
+    return `Mesh initialized.\n\nCreated or verified:\n- mesh.config.ts\n- .meshenv.example\n- package.json scripts\n\nCopy .meshenv.example to .meshenv for local non-secret env overrides.\n\nRun:\n  npm run mesh:run\n  npm run mesh:run:all\n  npm run mesh:ps\n  npm run mesh:dashboard\n`
+  }
+
+  private meshenvExampleTemplate(): string {
+    return `# Local mesh overrides (copy to .meshenv — not committed, no GitHub secret needed)
+AUTH_COOKIE_DOMAIN=.panom.app
+CORS_ALLOWED_ORIGINS=https://dev.panom.app:3000,https://dev.panom.app,https://panom.app,https://box.panom.app,https://cloud.panom.app
+APP_URL=https://dev.panom.app:3000
+`
   }
 
   private async patchPackageJson(packagePath: string): Promise<void> {

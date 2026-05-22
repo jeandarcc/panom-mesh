@@ -1,5 +1,4 @@
 import process from 'node:process'
-import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +14,8 @@ import { promisify } from 'node:util'
 import type { NormalizedMeshServiceConfig } from '../core/types.js'
 import { SimpleRedisClient } from '../registry/redis/SimpleRedisClient.js'
 import { sleep } from '../utils/time.js'
+import { readEnvFile } from '../utils/envFile.js'
+import { getMeshenv } from '../config/meshEnv.js'
 
 const execFileAsync = promisify(execFile)
 const REDIS_CONNECT_RETRY_COUNT = 5
@@ -80,10 +81,12 @@ export class ProcessRedisPreflight {
   }
 
   private resolveEffectiveEnv(service: NormalizedMeshServiceConfig): EffectiveServiceEnv {
-    const dotenvEnv = this.readDotenv(service.cwd)
+    const dotenvEnv = readEnvFile(path.join(service.cwd, '.env'))
+    const meshenv = getMeshenv()
     const realtimeEnabled = (
       service.env.REALTIME_ENABLED ??
       process.env.REALTIME_ENABLED ??
+      meshenv.REALTIME_ENABLED ??
       dotenvEnv.REALTIME_ENABLED ??
       'false'
     ) === 'true'
@@ -91,9 +94,11 @@ export class ProcessRedisPreflight {
     const redisUrl =
       service.env.REALTIME_REDIS_URL ||
       process.env.REALTIME_REDIS_URL ||
+      meshenv.REALTIME_REDIS_URL ||
       dotenvEnv.REALTIME_REDIS_URL ||
       service.env.REDIS_URL ||
       process.env.REDIS_URL ||
+      meshenv.REDIS_URL ||
       dotenvEnv.REDIS_URL ||
       'redis://127.0.0.1:6379'
 
@@ -101,37 +106,6 @@ export class ProcessRedisPreflight {
       realtimeEnabled,
       redisUrl,
     }
-  }
-
-  private readDotenv(cwd: string): Record<string, string> {
-    const envPath = path.join(cwd, '.env')
-    if (!fs.existsSync(envPath)) return {}
-
-    const content = fs.readFileSync(envPath, 'utf8')
-    const parsed: Record<string, string> = {}
-
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim()
-      if (!line || line.startsWith('#')) continue
-
-      const separatorIndex = line.indexOf('=')
-      if (separatorIndex <= 0) continue
-
-      const key = line.slice(0, separatorIndex).trim()
-      let value = line.slice(separatorIndex + 1).trim()
-      if (!key) continue
-
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1)
-      }
-
-      parsed[key] = value
-    }
-
-    return parsed
   }
 
   private async isRedisReachable(redisUrl: string): Promise<boolean> {

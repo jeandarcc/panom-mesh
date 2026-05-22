@@ -6,6 +6,7 @@ import { nowIso } from '../utils/time.js'
 import { PortAllocator } from './PortAllocator.js'
 import { ProcessTakeover } from './ProcessTakeover.js'
 import type { MeshStreamPublisher } from '../streaming/types.js'
+import { getMeshenv } from '../config/meshEnv.js'
 
 export interface SpawnedMeshInstance {
   readonly record: MeshInstanceRecord
@@ -91,6 +92,7 @@ export class ProcessInstanceSpawner {
   ): NodeJS.ProcessEnv {
     return {
       ...process.env,
+      ...getMeshenv(),
       ...service.env,
       MESH_APP: this.config.app,
       MESH_SERVICE: service.name,

@@ -25,6 +25,9 @@ interface ServiceGroup {
 
 const RUNTIME_BUNDLE_DIR = path.join('.mesh', 'runtime-bundle')
 const RUNTIME_BUNDLE_COPY_EXCLUDES = new Set(['.git', 'node_modules', 'dist', '.turbo', '.next', '.DS_Store'])
+/** Deploy SSH health poll: attempts × sleepSec ≈ max wait before CI fails (cold pull + 2× API + router). */
+const DEPLOY_HEALTH_ATTEMPTS = 25
+const DEPLOY_HEALTH_SLEEP_SEC = 3
 
 type DrsWorkflowPlan = ReturnType<typeof getDrsWorkflowPlan>
 
@@ -883,13 +886,13 @@ module.exports = defineMeshConfig({
       '',
       '          echo "[deploy] Waiting for backend health: ${HEALTH_URL}"',
       '          healthy=0',
-      '          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
+      `          for i in $(seq 1 ${DEPLOY_HEALTH_ATTEMPTS}); do`,
       '            if curl -fsS --max-time 5 "${HEALTH_URL}" >/dev/null; then',
       '              healthy=1',
       '              break',
       '            fi',
       '            echo "[deploy] Health check attempt $i failed, retrying..."',
-      '            sleep 3',
+      `            sleep ${DEPLOY_HEALTH_SLEEP_SEC}`,
       '          done',
       '',
       '          if [ "${healthy}" -ne 1 ]; then',
@@ -1159,12 +1162,13 @@ module.exports = defineMeshConfig({
       '            systemctl --user restart panom-backend-mesh.service',
       '',
       '            healthy=0',
-      '            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
+      `            for i in $(seq 1 ${DEPLOY_HEALTH_ATTEMPTS}); do`,
       '              if curl -fsS --max-time 5 http://127.0.0.1:8080/health >/dev/null; then',
       '                healthy=1',
       '                break',
       '              fi',
-      '              sleep 3',
+      `              echo "[deploy] Health check attempt $i failed, retrying..."`,
+      `              sleep ${DEPLOY_HEALTH_SLEEP_SEC}`,
       '            done',
       '',
       '            if [ "$healthy" -ne 1 ]; then',

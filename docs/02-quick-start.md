@@ -12,7 +12,26 @@ Generate the starter files:
 
 ```bash
 npx @panomapp/mesh init
+cp .meshenv.example .meshenv
 ```
+
+## Local environment (`.meshenv`)
+
+Mesh loads `.meshenv` from the directory where you run mesh commands (typically the repo root). Values are merged into:
+
+- `process.env` before `mesh.config.ts` is evaluated (so `runtimeEnv()` picks them up)
+- every spawned frontend, backend and worker process
+- podman container env in podman mode
+
+Use `.meshenv` for local non-secret overrides you do not want in GitHub Actions secrets:
+
+```env
+AUTH_COOKIE_DOMAIN=.panom.app
+CORS_ALLOWED_ORIGINS=https://dev.panom.app:3000,https://dev.panom.app
+APP_URL=https://dev.panom.app:3000
+```
+
+Commit `.meshenv.example`; keep `.meshenv` gitignored.
 
 ## First Config
 

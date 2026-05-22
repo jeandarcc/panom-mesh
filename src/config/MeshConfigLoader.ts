@@ -6,6 +6,7 @@ import type { MeshConfig, NormalizedMeshConfig } from '../core/types.js'
 import { pathExists } from '../utils/fs.js'
 import { MeshConfigNormalizer } from './MeshConfigNormalizer.js'
 import { HsmSchemaLoader } from '../hsm/HsmSchemaLoader.js'
+import { applyMeshenv } from './meshEnv.js'
 
 const CONFIG_FILES = [
   'mesh.config.ts',
@@ -30,6 +31,7 @@ export class MeshConfigLoader {
   }
 
   public async load(configPath?: string, projectRoot = process.cwd()): Promise<NormalizedMeshConfig> {
+    applyMeshenv(projectRoot)
     const resolvedPath = configPath ? path.resolve(projectRoot, configPath) : await this.findConfig(projectRoot)
     const raw = await this.loadRaw(resolvedPath)
     const hydrated = await this.hsmLoader.hydrateConfig(raw, resolvedPath)
