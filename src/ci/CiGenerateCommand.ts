@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../utils/fs.js'
+import { getBackendDockerfileRelativePath, renderBackendDockerfile } from './BackendDockerfileRenderer.js'
 import { getDrsPackageEntry, getDrsWorkflowPlan } from './drs.js'
 import type {
   NormalizedMeshConfig,
@@ -11,7 +12,7 @@ import type {
 
 interface CiArtifact {
   readonly repoDir: string
-  readonly name: string
+  readonly relativePath: string
   readonly content: string
 }
 
@@ -34,19 +35,22 @@ export class CiGenerateCommand {
     await this.syncGeneratedRuntimeBundles(options.service)
 
     if (options.print) {
-      return artifacts.map(a => `# ${a.repoDir}/.github/workflows/${a.name}\n${a.content.trim()}\n`).join('\n') + '\n'
+      return artifacts.map(a => `# ${path.join(a.repoDir, a.relativePath)}\n${a.content.trim()}\n`).join('\n') + '\n'
     }
 
     for (const artifact of artifacts) {
-      const dir = path.join(artifact.repoDir, '.github', 'workflows')
-      await ensureDir(dir)
-      const target = path.join(dir, artifact.name)
+      const target = path.join(artifact.repoDir, artifact.relativePath)
+      await ensureDir(path.dirname(target))
       await fs.promises.writeFile(target, artifact.content, 'utf8')
     }
 
-    const lines = [`Generated ${artifacts.length} CI workflow file(s):`]
+    const workflowCount = artifacts.filter(a => a.relativePath.endsWith('deploy.yml')).length
+    const dockerfileCount = artifacts.length - workflowCount
+    const lines = [
+      `Generated ${workflowCount} CI workflow file(s) and ${dockerfileCount} Dockerfile(s):`,
+    ]
     for (const artifact of artifacts) {
-      lines.push(`  ${path.join(artifact.repoDir, '.github', 'workflows', artifact.name)}`)
+      lines.push(`  ${path.join(artifact.repoDir, artifact.relativePath)}`)
     }
     return `${lines.join('\n')}\n`
   }
@@ -77,7 +81,7 @@ export class CiGenerateCommand {
         const frontendSvc = group.services.find(s => s.type === 'frontend')!
         artifacts.push({
           repoDir: group.cwd,
-          name: 'deploy.yml',
+          relativePath: path.join('.github', 'workflows', 'deploy.yml'),
           content: this.frontendWorkflow(frontendSvc, ci),
         })
       }
@@ -85,15 +89,30 @@ export class CiGenerateCommand {
       if (hasBackend) {
         const apiSvc = group.services.find(s => s.type === 'backend')
         const workerSvc = group.services.find(s => s.type === 'worker')
+        const backendSvc = apiSvc ?? workerSvc!
         artifacts.push({
           repoDir: group.cwd,
-          name: 'deploy.yml',
-          content: this.backendWorkflow(apiSvc ?? workerSvc!, workerSvc, ci),
+          relativePath: path.join('.github', 'workflows', 'deploy.yml'),
+          content: this.backendWorkflow(backendSvc, workerSvc, ci),
+        })
+        artifacts.push({
+          repoDir: group.cwd,
+          relativePath: getBackendDockerfileRelativePath(ci.docker),
+          content: this.renderBackendDockerfile(backendSvc, ci),
         })
       }
     }
 
     return artifacts
+  }
+
+  private renderBackendDockerfile(service: NormalizedMeshServiceConfig, ci: NormalizedMeshCiConfig): string {
+    const input = {
+      service,
+      docker: ci.docker,
+      ...(ci.drs.enabled ? { drsPlan: this.frontendDrsPlan(service) } : {}),
+    }
+    return renderBackendDockerfile(input)
   }
 
   private groupByCwd(onlyService?: string): readonly ServiceGroup[] {
@@ -121,7 +140,7 @@ export class CiGenerateCommand {
     return getDrsWorkflowPlan(this.config.projectRoot, svc.cwd)
   }
 
-  private frontendDrsBootstrapSteps(plan: ReturnType<typeof getDrsWorkflowPlan>): string[] {
+  private drsBootstrapSteps(plan: ReturnType<typeof getDrsWorkflowPlan>): string[] {
     const steps: string[] = []
 
     for (const sourcePackage of plan.sourcePackages) {
@@ -156,7 +175,7 @@ export class CiGenerateCommand {
       '      - name: Checkout',
       '        uses: actions/checkout@v4',
       '',
-      ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
+      ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
     const setupNodeStep = [
       '      - name: Setup Node',
@@ -269,7 +288,7 @@ export class CiGenerateCommand {
       '      - name: Checkout',
       '        uses: actions/checkout@v4',
       '',
-      ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
+      ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
     const setupNodeStep = [
       '      - name: Setup Node',
@@ -578,7 +597,7 @@ module.exports = defineMeshConfig({
     const secrets = ci.backend.envSecrets
     const hasWorker = workerSvc !== undefined
     const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
-    const backendDockerfilePath = 'Dockerfile'
+    const dockerfilePath = ci.docker.backend.dockerfile
 
     const FIXED_KEYS = new Set(['NODE_ENV', 'PORT'])
     const envSecretsLines = secrets.map(k => '          ' + k + ': ' + this.ghaSecret(k)).join('\n')
@@ -604,7 +623,7 @@ module.exports = defineMeshConfig({
       '      - name: Checkout',
       '        uses: actions/checkout@v4',
       '',
-      ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
+      ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
 
     const setupNodeStep = [
@@ -665,7 +684,7 @@ module.exports = defineMeshConfig({
       '',
       '      - name: Build Image',
       '        run: |',
-      '          docker build -t ' + image + ' -f ' + backendDockerfilePath + ' .',
+      '          docker build -t ' + image + ' -f ' + dockerfilePath + ' .',
       '',
       '      - name: Push Image',
       '        run: |',
@@ -839,7 +858,7 @@ module.exports = defineMeshConfig({
       '      - name: Checkout',
       '        uses: actions/checkout@v4',
       '',
-      ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
+      ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
       '      - name: Prepare @panomapp/mesh prebuilt runtime',
         '        working-directory: .mesh/runtime-bundle/generated_modules/panom-mesh',
         '        run: |',
@@ -922,7 +941,7 @@ module.exports = defineMeshConfig({
       '          exit 1',
       '',
       '      - name: Build backend image',
-      '        run: docker build -t "$BACKEND_IMAGE" -f Dockerfile .',
+      '        run: docker build -t "$BACKEND_IMAGE" -f ' + ci.docker.backend.dockerfile + ' .',
       '',
       '      - name: Push backend image',
       '        run: docker push "$BACKEND_IMAGE"',
@@ -1108,7 +1127,7 @@ module.exports = defineMeshConfig({
       '      - name: Checkout',
       '        uses: actions/checkout@v4',
       '',
-      ...(ci.drs.enabled ? this.frontendDrsBootstrapSteps(plan!) : []),
+      ...(ci.drs.enabled ? this.drsBootstrapSteps(plan!) : []),
     ]
 
     const setupNodeStep = [
@@ -1133,17 +1152,12 @@ module.exports = defineMeshConfig({
         '',
       ]
 
-    const buildImageStep = ci.drs.enabled
-      ? [
-        '      - name: Build backend image',
-        '        run: docker build -t "$BACKEND_IMAGE" .',
-        '',
-      ]
-      : [
-        '      - name: Build backend image',
-        '        run: docker build -t "$BACKEND_IMAGE" .',
-        '',
-      ]
+    const dockerfilePath = ci.docker.backend.dockerfile
+    const buildImageStep = [
+      '      - name: Build backend image',
+      '        run: docker build -t "$BACKEND_IMAGE" -f ' + dockerfilePath + ' .',
+      '',
+    ]
 
     const generateQuadletStep = ci.drs.enabled
       ? [

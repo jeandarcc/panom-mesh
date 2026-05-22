@@ -558,6 +558,21 @@ export interface MeshCiDrsConfig {
   readonly enabled?: boolean
 }
 
+export interface MeshCiDockerBackendConfig {
+  /** Dockerfile path relative to the backend service cwd. Default: `'Dockerfile'` */
+  readonly dockerfile?: string
+  /** Debian packages installed in builder and runtime stages. Default: `['openssl']` */
+  readonly systemPackages?: readonly string[]
+  /** Build step run in the builder stage after sources are copied. */
+  readonly buildCommand?: string
+}
+
+export interface MeshCiDockerConfig {
+  readonly nodeMajor?: number
+  readonly nodeVariant?: string
+  readonly backend?: MeshCiDockerBackendConfig
+}
+
 /**
  * Top-level `ci:` block inside `mesh.config.ts`.
  * Used by `mesh ci:generate` to produce per-repo GitHub Actions workflows.
@@ -568,6 +583,7 @@ export interface MeshCiConfig {
   readonly frontend?: MeshCiFrontendConfig
   readonly backend?: MeshCiBackendConfig
   readonly drs?: MeshCiDrsConfig
+  readonly docker?: MeshCiDockerConfig
 }
 
 export interface NormalizedMeshCiFrontendConfig {
@@ -584,12 +600,24 @@ export interface NormalizedMeshCiDrsConfig {
   readonly enabled: boolean
 }
 
+export interface NormalizedMeshCiDockerBackendConfig {
+  readonly dockerfile: string
+  readonly systemPackages: readonly string[]
+  readonly buildCommand: string
+}
+
+export interface NormalizedMeshCiDockerConfig {
+  readonly nodeImage: string
+  readonly backend: NormalizedMeshCiDockerBackendConfig
+}
+
 export interface NormalizedMeshCiConfig {
   readonly enabled: boolean
   readonly branch: string
   readonly frontend: NormalizedMeshCiFrontendConfig
   readonly backend: NormalizedMeshCiBackendConfig
   readonly drs: NormalizedMeshCiDrsConfig
+  readonly docker: NormalizedMeshCiDockerConfig
 }
 
 export interface MeshCiGenerateOptions {

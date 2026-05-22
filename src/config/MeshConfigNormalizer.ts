@@ -469,6 +469,10 @@ export class MeshConfigNormalizer {
       return [...keys].sort()
     }
 
+    const nodeMajor = ci.docker?.nodeMajor ?? 20
+    const nodeVariant = ci.docker?.nodeVariant ?? 'bookworm-slim'
+    const systemPackages = ci.docker?.backend?.systemPackages ?? ['openssl']
+
     return {
       enabled,
       branch: ci.branch ?? 'main',
@@ -482,6 +486,14 @@ export class MeshConfigNormalizer {
       },
       drs: {
         enabled: ci.drs?.enabled ?? false
+      },
+      docker: {
+        nodeImage: `node:${nodeMajor}-${nodeVariant}`,
+        backend: {
+          dockerfile: ci.docker?.backend?.dockerfile ?? 'Dockerfile',
+          systemPackages,
+          buildCommand: ci.docker?.backend?.buildCommand ?? 'npm run prisma:generate && npm run build'
+        }
       }
     }
   }
