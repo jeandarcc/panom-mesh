@@ -202,6 +202,9 @@ export class CiGenerateCommand {
     const buildArgs = ci.frontend.buildArgs
     const buildEnvLines = buildArgs.map(k => `          ${k}: ${this.ghaSecret(k)}`).join('\n')
     const buildEnvBlock = buildArgs.length > 0 ? '\n' + buildEnvLines : ''
+    const apiSvc = Array.from(this.config.services.values()).find(service => service.type === 'backend')
+    const apiBasePort = this.config.runtime.portRange.from
+    const apiInstances = apiSvc?.instances ?? 1
     const plan = ci.drs.enabled ? this.frontendDrsPlan(svc) : undefined
     const installCommand = this.frontendInstallCommand(ci, plan)
     const checkoutStep = [
@@ -246,6 +249,9 @@ export class CiGenerateCommand {
       '        run: npm run build',
       '',
       '      - name: Generate nginx config',
+      '        env:',
+      '          PANOM_API_BASE_PORT: ' + JSON.stringify(String(apiBasePort)),
+      '          PANOM_API_INSTANCES: ' + JSON.stringify(String(apiInstances)),
       '        run: npm run nginx:generate',
       '',
       '      - name: Setup SSH',
@@ -563,7 +569,7 @@ module.exports = defineMeshConfig({
   app: ${JSON.stringify(this.config.app)},
 
   router: {
-    enabled: true,
+    enabled: false,
     host: '127.0.0.1',
     port: 8080,
     sessionAffinity: true,
@@ -816,7 +822,7 @@ module.exports = defineMeshConfig({
       '',
       ...this.deployPodmanPruneShellLines('podman', '          '),
       '          IMAGE="$1"',
-      '          HEALTH_URL="http://127.0.0.1:8080/health"',
+      '          HEALTH_URL="http://127.0.0.1:31000/health"',
       '',
       '          check_podman() {',
       '            local output',
@@ -876,7 +882,7 @@ module.exports = defineMeshConfig({
       '          podman run -d \\',
       '            --env-file ~/.panom.env \\',
       '            -e PANOM_ENABLE_BACKGROUND_JOBS=false \\',
-      '            -p 8080:8080 \\',
+      '            -p 31000:8080 \\',
       '            --name panom \\',
       '            "${IMAGE}"',
       '',
@@ -1154,10 +1160,10 @@ module.exports = defineMeshConfig({
           '          	[Service]',
           '          	WorkingDirectory=%h/.panom/backend-runtime',
           '          	EnvironmentFile=%h/.panom/backend-runtime/.env',
-          '          	Environment=PANOM_PODMAN_BIN=${PODMAN_BIN}',
-          '          	Environment=PATH=${SERVICE_PATH}',
-          '          	ExecStart=${NODE_BIN} %h/.panom/backend-runtime/generated_modules/panom-mesh/dist/cli/index.cjs run --all --config %h/.panom/backend-runtime/mesh.config.cjs',
-          '          	ExecStop=${NODE_BIN} %h/.panom/backend-runtime/generated_modules/panom-mesh/dist/cli/index.cjs podman:stop --config %h/.panom/backend-runtime/mesh.config.cjs --force',
+      '          	Environment=PANOM_PODMAN_BIN=${PODMAN_BIN}',
+      '          	Environment=PATH=${SERVICE_PATH}',
+      '          	ExecStart=${NODE_BIN} %h/.panom/backend-runtime/generated_modules/panom-mesh/dist/cli/index.cjs run --all --router=false --config %h/.panom/backend-runtime/mesh.config.cjs',
+      '          	ExecStop=${NODE_BIN} %h/.panom/backend-runtime/generated_modules/panom-mesh/dist/cli/index.cjs podman:stop --config %h/.panom/backend-runtime/mesh.config.cjs --force',
           '          	Restart=always',
           '          	RestartSec=5',
           '          	TimeoutStopSec=20',
@@ -1175,7 +1181,7 @@ module.exports = defineMeshConfig({
       '',
       '            healthy=0',
       `            for i in $(seq 1 ${DEPLOY_HEALTH_ATTEMPTS}); do`,
-      '              if curl -fsS --max-time 5 http://127.0.0.1:8080/health >/dev/null; then',
+      '              if curl -fsS --max-time 5 http://127.0.0.1:31000/health >/dev/null; then',
       '                healthy=1',
       '                break',
       '              fi',
@@ -1358,7 +1364,7 @@ module.exports = defineMeshConfig({
       '            systemctl --user daemon-reload',
       '            systemctl --user reset-failed || true',
       '',
-      '            HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8080/health}"',
+      '            HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:31000/health}"',
       '',
       '            wait_for_mesh_health() {',
       '              for attempt in $(seq 1 20); do',
