@@ -661,6 +661,17 @@ module.exports = defineMeshConfig({
       : this.backendPodmanWorkflow(apiSvc, workerSvc, ci)
   }
 
+  /** Deploy-time podman disk cleanup (container/image/system prune). */
+  private deployPodmanPruneShellLines(podmanCmd: string, indent = '            '): string[] {
+    return [
+      `${indent}echo "[deploy] Pruning unused podman resources..."`,
+      `${indent}${podmanCmd} container prune -f || true`,
+      `${indent}${podmanCmd} image prune -a -f || true`,
+      `${indent}${podmanCmd} system prune -f || true`,
+      '',
+    ]
+  }
+
   private backendPodmanWorkflow(
     apiSvc: NormalizedMeshServiceConfig,
     workerSvc: NormalizedMeshServiceConfig | undefined,
@@ -803,10 +814,7 @@ module.exports = defineMeshConfig({
       '          ssh -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s -- \'$IMAGE\'" <<-\'EOF\'',
       '          set -euo pipefail',
       '',
-      '          podman container prune -f || true',
-      '          podman image prune -a -f || true',
-      '          podman system prune -f || true',
-      '',
+      ...this.deployPodmanPruneShellLines('podman', '          '),
       '          IMAGE="$1"',
       '          HEALTH_URL="http://127.0.0.1:8080/health"',
       '',
@@ -1160,6 +1168,7 @@ module.exports = defineMeshConfig({
       '',
       '            systemctl --user stop panom-backend-mesh.service >/dev/null 2>&1 || true',
       '',
+      ...this.deployPodmanPruneShellLines('"$PODMAN_BIN"'),
       '            systemctl --user daemon-reload',
       '            systemctl --user enable panom-backend-mesh.service >/dev/null 2>&1 || true',
       '            systemctl --user restart panom-backend-mesh.service',
