@@ -2,6 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import https, { type ServerOptions as HttpsServerOptions } from 'node:https'
 import net from 'node:net'
 import fs from 'node:fs'
+import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { MeshConnectionCounters, NormalizedMeshConfig } from '../core/types.js'
 import { ActiveConnectionTracker, type ActiveConnectionSnapshot } from '../drain/ActiveConnectionTracker.js'
@@ -13,6 +14,7 @@ import { StickySession } from './StickySession.js'
 import { RouterMetrics } from '../observability/RouterMetrics.js'
 import { formatOrigin } from '../utils/origin.js'
 import { ErrorPageServer } from './ErrorPageServer.js'
+import { IncidentReportSink } from '../incidents/IncidentReportSink.js'
 import { sleep } from '../utils/time.js'
 
 export interface MeshRouterServerOptions {
@@ -35,6 +37,7 @@ export class MeshRouterServer {
   private readonly metrics = new RouterMetrics()
   private readonly instanceService = new Map<string, string>()
   private readonly errorPages: ErrorPageServer
+  private readonly incidentSink: IncidentReportSink
   private closed = false
   private draining = false
 
@@ -46,6 +49,9 @@ export class MeshRouterServer {
       secure: options.config.router.secureCookies
     }))
     this.errorPages = new ErrorPageServer(options.config.router.errorPagesDir)
+    this.incidentSink = new IncidentReportSink(
+      path.join(options.config.runtime.stateDir, 'incident-queue')
+    )
     this.servers = this.createServers()
   }
 
@@ -108,7 +114,11 @@ export class MeshRouterServer {
       const url = new URL(req.url ?? '/', `${forwardedProto}://${req.headers.host ?? 'localhost'}`)
       if (this.handleManagement(url, req, res)) return
       if (this.errorPages.tryServe(url.pathname, res)) return
-      if (this.draining) {
+
+      const isIncidentReport =
+        req.method === 'POST' && this.incidentSink.isReportPath(url.pathname)
+
+      if (this.draining && !isIncidentReport) {
         if (this.errorPages.serveMeshRouterDraining(req, res, {
           pathname: url.pathname,
           requestId,
@@ -118,6 +128,16 @@ export class MeshRouterServer {
         }
         this.respond(res, 503, { error: 'mesh_router_draining', requestId })
         return
+      }
+
+      if (isIncidentReport) {
+        const incidentTarget = this.draining
+          ? null
+          : await this.selectTargetWithRetry(url.pathname, req)
+        if (!incidentTarget) {
+          await this.incidentSink.accept(req, res, requestId)
+          return
+        }
       }
 
       // Defense-in-depth: reject obvious reverse-proxy loops detected via X-Forwarded-For depth.
