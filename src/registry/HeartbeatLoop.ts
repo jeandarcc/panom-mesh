@@ -15,7 +15,9 @@ export class HeartbeatLoop {
     this.timer = setInterval(() => {
       void this.registry.heartbeat(this.instanceId, { ttlMs: this.ttlMs }).catch(() => undefined)
     }, this.intervalMs)
-    this.timer.unref?.()
+    // Keep the Node event loop alive while mesh supervises detached Podman containers.
+    // waitForever() alone does not hold the process open; unref() here caused systemd
+    // ExecStart to exit ~3s after container start (Restart=always stop/start loop).
   }
 
   public stop(): void {

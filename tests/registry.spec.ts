@@ -2,6 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FileMeshRegistry } from '../src/registry/FileMeshRegistry.js'
+import { HeartbeatLoop } from '../src/registry/HeartbeatLoop.js'
 import { RegistrationSigner } from '../src/registry/RegistrationSigner.js'
 import type { MeshInstanceRecord } from '../src/core/types.js'
 
@@ -43,5 +44,21 @@ describe('registry', () => {
     const signed = signer.attach(record())
     expect(signer.verify(signed)).toBe(true)
     expect(signer.verify({ ...signed, url: 'http://evil.local:3000' })).toBe(false)
+  })
+
+  it('heartbeat timer keeps the event loop alive for supervisors', async () => {
+    const registry = {
+      heartbeat: async () => undefined,
+    }
+    const loop = new HeartbeatLoop(registry, 'api-a7f2', 50, 100)
+    loop.start()
+
+    const outcome = await Promise.race([
+      new Promise<'alive'>((resolve) => setTimeout(() => resolve('alive'), 120)),
+      new Promise<'exit'>((resolve) => process.once('beforeExit', () => resolve('exit'))),
+    ])
+
+    loop.stop()
+    expect(outcome).toBe('alive')
   })
 })
