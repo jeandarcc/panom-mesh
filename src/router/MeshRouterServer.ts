@@ -27,6 +27,14 @@ export interface MeshRouterDrainResult {
   readonly snapshot: ActiveConnectionSnapshot
 }
 
+function isTransientProxyError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code
+  if (code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ECONNABORTED' || code === 'ETIMEDOUT') {
+    return true
+  }
+  return error instanceof Error && /timed out/i.test(error.message)
+}
+
 export class MeshRouterServer {
   private readonly servers: http.Server[]
   private readonly registry: InstanceRegistry
@@ -152,8 +160,8 @@ export class MeshRouterServer {
         return
       }
 
-      const routed = await this.selectTargetWithRetry(url.pathname, req)
-      if (!routed) {
+      const proxied = await this.routeAndProxyHttp(url.pathname, req, res, requestId, forwardedProto)
+      if (!proxied) {
         this.metrics.recordNoTarget()
         if (this.errorPages.serveMeshNoTarget(req, res, {
           pathname: url.pathname,
@@ -166,17 +174,6 @@ export class MeshRouterServer {
         this.respond(res, 503, { error: 'mesh_no_target', requestId })
         return
       }
-
-      const { instance, service, target, setCookie } = routed
-      this.metrics.recordProxy(service)
-      if (setCookie) res.setHeader('Set-Cookie', setCookie)
-      this.balancer.begin(instance.id)
-      const endTracked = this.tracker.beginHttp(instance.id)
-      await this.proxyHttp(req, res, target, requestId, instance.serviceType, forwardedProto)
-        .finally(() => {
-          endTracked()
-          this.balancer.end(instance.id)
-        })
     } catch (error) {
       this.metrics.recordError()
       this.respond(res, 502, { error: 'mesh_proxy_error', message: (error as Error).message, requestId })
@@ -246,6 +243,53 @@ export class MeshRouterServer {
       socket.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
       socket.destroy()
     }
+  }
+
+  private async routeAndProxyHttp(
+    pathname: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestId: string,
+    forwardedProto: 'http' | 'https'
+  ): Promise<boolean> {
+    const { attempts, delayMs } = this.options.config.router.targetRetry
+    let lastError: unknown = null
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const routed = await this.selectTarget(pathname, req)
+      if (!routed) {
+        if (attempt < attempts - 1) {
+          await sleep(delayMs * (attempt + 1))
+          continue
+        }
+        return false
+      }
+
+      const { instance, service, target, setCookie } = routed
+      this.metrics.recordProxy(service)
+      if (setCookie) res.setHeader('Set-Cookie', setCookie)
+      this.balancer.begin(instance.id)
+      const endTracked = this.tracker.beginHttp(instance.id)
+
+      try {
+        await this.proxyHttp(req, res, target, requestId, instance.serviceType, forwardedProto)
+        return true
+      } catch (error) {
+        lastError = error
+        if (!isTransientProxyError(error)) throw error
+        this.registry.invalidateHealth(instance.id)
+      } finally {
+        endTracked()
+        this.balancer.end(instance.id)
+      }
+
+      if (attempt < attempts - 1) {
+        await sleep(delayMs * (attempt + 1))
+      }
+    }
+
+    if (lastError) throw lastError
+    return false
   }
 
   private async selectTargetWithRetry(pathname: string, req: IncomingMessage): Promise<{ instance: import('../core/types.js').MeshInstanceRecord; service: string; target: URL; setCookie?: string } | null> {

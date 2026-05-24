@@ -265,6 +265,43 @@ describe('MeshRouterServer', () => {
     expect(receivedUpgrade.toLowerCase()).toBe('websocket')
     expect(receivedProtocol).toBe('vite-hmr')
   })
+
+  it('returns mesh_no_target when the backend port is down instead of 502', async () => {
+    const projectRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mesh-router-dead-api-'))
+    const stateDir = path.join(projectRoot, '.mesh')
+    const deadPort = await freePort()
+
+    const routerPort = await freePort()
+    const config = new MeshConfigNormalizer().normalize({
+      app: 'test-dead-api',
+      router: {
+        port: routerPort,
+        secret: 'test-secret-123',
+        health: { cacheMs: 0, failureThreshold: 1, staleGraceMs: 0, startingGraceMs: 0 },
+        targetRetry: { attempts: 2, delayMs: 10 }
+      },
+      runtime: { stateDir, logsDir: path.join(stateDir, 'logs') },
+      services: {
+        api: {
+          type: 'backend',
+          command: 'node server.js',
+          route: '/api',
+          healthPath: '/health'
+        }
+      }
+    }, projectRoot, path.join(projectRoot, 'mesh.config.ts'))
+
+    const store = new MeshStateStore('test-dead-api', stateDir)
+    await store.upsert(record('api', '/api', deadPort, process.pid))
+
+    const router = new MeshRouterServer({ config })
+    await router.listen()
+    cleanup.push(() => router.close())
+
+    const res = await request(routerPort, '/api/posts')
+    expect(res.status).toBe(503)
+    expect(res.body).toContain('mesh_no_target')
+  })
 })
 
 describe('MeshRouterServer management endpoints', () => {

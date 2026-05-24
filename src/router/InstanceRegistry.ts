@@ -11,6 +11,12 @@ interface HealthState {
   lastHealthyAt: number | null
 }
 
+interface HealthProbeResult {
+  readonly probeHealthy: boolean
+  readonly connectionFailed: boolean
+  readonly statusCode: number | null
+}
+
 export class InstanceRegistry {
   private readonly registry: MeshRegistry
   private readonly healthCache = new Map<string, HealthState>()
@@ -36,6 +42,17 @@ export class InstanceRegistry {
     return results.filter(result => result.healthy).map(result => result.instance)
   }
 
+  /** Drop cached health so the next route selection re-probes (e.g. after ECONNREFUSED). */
+  public invalidateHealth(instanceId: string): void {
+    const health = this.config.router.health
+    this.healthCache.set(instanceId, {
+      healthy: false,
+      checkedAt: Date.now(),
+      consecutiveFailures: health.failureThreshold,
+      lastHealthyAt: null
+    })
+  }
+
   private checkStartingGrace(instance: MeshInstanceRecord): boolean {
     const graceMs = this.config.router.health.startingGraceMs
     if (graceMs <= 0 || !instance.startedAt) return false
@@ -59,27 +76,21 @@ export class InstanceRegistry {
       return true
     }
 
-    const target = new URL(healthPath, instance.url)
-    const probeHealthy = await new Promise<boolean>(resolve => {
-      const req = http.request(target, { method: 'GET', timeout: health.checkTimeoutMs }, res => {
-        res.resume()
-        resolve((res.statusCode ?? 500) >= 200 && (res.statusCode ?? 500) < 500)
-      })
-      req.on('timeout', () => {
-        req.destroy()
-        resolve(false)
-      })
-      req.on('error', () => resolve(false))
-      req.end()
-    })
+    const probe = await this.probeHttpHealth(new URL(healthPath, instance.url), health.checkTimeoutMs)
+    const probeHealthy = probe.probeHealthy
 
     const previous = cached ?? { healthy: true, checkedAt: 0, consecutiveFailures: 0, lastHealthyAt: now }
     const consecutiveFailures = probeHealthy ? 0 : previous.consecutiveFailures + 1
     const lastHealthyAt = probeHealthy ? now : (previous.lastHealthyAt ?? null)
 
+    const skipStaleGrace =
+      probe.connectionFailed ||
+      probe.statusCode === 503
+
     let healthy = probeHealthy
     if (!probeHealthy) {
       if (
+        !skipStaleGrace &&
         previous.lastHealthyAt !== null &&
         now - previous.lastHealthyAt <= health.staleGraceMs
       ) {
@@ -97,5 +108,25 @@ export class InstanceRegistry {
 
   private setHealthState(instanceId: string, state: HealthState): void {
     this.healthCache.set(instanceId, state)
+  }
+
+  private probeHttpHealth(target: URL, checkTimeoutMs: number): Promise<HealthProbeResult> {
+    return new Promise(resolve => {
+      let statusCode: number | null = null
+      const req = http.request(target, { method: 'GET', timeout: checkTimeoutMs }, res => {
+        statusCode = res.statusCode ?? null
+        res.resume()
+        const probeHealthy = (statusCode ?? 500) >= 200 && (statusCode ?? 500) < 500
+        resolve({ probeHealthy, connectionFailed: false, statusCode })
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        resolve({ probeHealthy: false, connectionFailed: true, statusCode })
+      })
+      req.on('error', () => {
+        resolve({ probeHealthy: false, connectionFailed: true, statusCode })
+      })
+      req.end()
+    })
   }
 }
