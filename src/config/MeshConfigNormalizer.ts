@@ -448,6 +448,8 @@ export class MeshConfigNormalizer {
     const enabled = config.ci !== undefined
 
     // Derive default backend envSecrets from the union of all backend/worker service env keys.
+    const envMeshenv = [...(ci.backend?.envMeshenv ?? [])].sort()
+    const envMeshenvSet = new Set(envMeshenv)
     const derivedBackendSecrets = (): readonly string[] => {
       const keys = new Set<string>()
       for (const svc of services.values()) {
@@ -458,7 +460,6 @@ export class MeshConfigNormalizer {
       return [...keys].sort()
     }
 
-    // Derive default frontend buildArgs from the frontend service's podman.env keys (VITE_* etc.).
     const derivedFrontendArgs = (): readonly string[] => {
       const keys = new Set<string>()
       for (const svc of services.values()) {
@@ -482,7 +483,9 @@ export class MeshConfigNormalizer {
       },
       backend: {
         strategy: ci.backend?.strategy ?? 'podman',
-        envSecrets: ci.backend?.envSecrets ?? derivedBackendSecrets()
+        envMeshenv,
+        envSecrets: (ci.backend?.envSecrets ?? derivedBackendSecrets())
+          .filter(key => !envMeshenvSet.has(key)),
       },
       drs: {
         enabled: ci.drs?.enabled ?? false

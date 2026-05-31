@@ -12,7 +12,7 @@ Generate the starter files:
 
 ```bash
 npx @panomapp/mesh init
-cp .meshenv.example .meshenv
+cp .meshenv.example .meshenv   # legacy — edit committed `.meshenv` at repo root instead
 ```
 
 ## Local environment (`.meshenv`)
@@ -23,7 +23,7 @@ Mesh loads `.meshenv` from the directory where you run mesh commands (typically 
 - every spawned frontend, backend and worker process
 - podman container env in podman mode
 
-Use `.meshenv` for local non-secret overrides you do not want in GitHub Actions secrets:
+Use committed `.meshenv` for non-secret overrides you do not want in GitHub Actions secrets:
 
 ```env
 AUTH_COOKIE_DOMAIN=.panom.app
@@ -31,7 +31,7 @@ CORS_ALLOWED_ORIGINS=https://dev.panom.app:3000,https://dev.panom.app
 APP_URL=https://dev.panom.app:3000
 ```
 
-Commit `.meshenv.example`; keep `.meshenv` gitignored.
+Commit `.meshenv`; keys in `mesh.config.ts` → `ci.backend.envMeshenv` are deployed from this file.
 
 ## First Config
 

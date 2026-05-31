@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../utils/fs.js'
+import { MESH_ENV_FILENAME } from '../utils/envFile.js'
 import { getBackendDockerfileRelativePath, renderBackendDockerfile } from './BackendDockerfileRenderer.js'
 import { getDrsPackageEntry, getDrsWorkflowPlan } from './drs.js'
 import type {
@@ -64,14 +65,55 @@ export class CiGenerateCommand {
   }
 
   private async syncGeneratedRuntimeBundles(onlyService?: string): Promise<void> {
-    if (this.config.ci.backend.strategy !== 'mesh') return
-
     for (const group of this.groupByCwd(onlyService)) {
       const apiSvc = group.services.find(service => service.type === 'backend')
       if (!apiSvc) continue
+      await this.syncMeshenvArtifacts(apiSvc)
+      if (this.config.ci.backend.strategy !== 'mesh') continue
       const workerSvc = group.services.find(service => service.type === 'worker')
       await this.syncBackendMeshRuntimeBundle(apiSvc, workerSvc)
     }
+  }
+
+  private async syncMeshenvArtifacts(apiSvc: NormalizedMeshServiceConfig): Promise<void> {
+    const meshenvKeys = this.config.ci.backend.envMeshenv
+    if (meshenvKeys.length === 0) return
+
+    const source = path.join(this.config.projectRoot, MESH_ENV_FILENAME)
+    if (!fs.existsSync(source)) {
+      throw new Error(`Missing committed ${source} — required for CI envMeshenv keys: ${meshenvKeys.join(', ')}`)
+    }
+
+    const targets = [
+      path.join(apiSvc.cwd, MESH_ENV_FILENAME),
+      path.join(apiSvc.cwd, RUNTIME_BUNDLE_DIR, MESH_ENV_FILENAME),
+    ]
+
+    for (const target of targets) {
+      await ensureDir(path.dirname(target))
+      await fs.promises.copyFile(source, target)
+    }
+  }
+
+  private renderMeshenvLoadShellLines(keys: readonly string[], indent = '          '): string[] {
+    if (keys.length === 0) return []
+
+    return [
+      `${indent}# Load committed mesh env overrides from .meshenv (not GitHub secrets)`,
+      `${indent}MESHENV_FILE=.meshenv`,
+      `${indent}if [ ! -f "$MESHENV_FILE" ]; then`,
+      `${indent}  echo "[deploy] ERROR: missing committed .meshenv at repo root"`,
+      `${indent}  exit 1`,
+      `${indent}fi`,
+      ...keys.flatMap(key => [
+        `${indent}${key}=$(grep -m1 '^${key}=' "$MESHENV_FILE" | cut -d= -f2-)`,
+        `${indent}if [ -z "$${key}" ]; then`,
+        `${indent}  echo "[deploy] ERROR: ${key} is missing in .meshenv"`,
+        `${indent}  exit 1`,
+        `${indent}fi`,
+      ]),
+      '',
+    ]
   }
 
   // ─── artifact builder ────────────────────────────────────────────────────
@@ -685,6 +727,7 @@ module.exports = defineMeshConfig({
   ): string {
     const image = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository_owner') + '/' + this.config.app + '-backend:latest'
     const secrets = ci.backend.envSecrets
+    const meshenvKeys = ci.backend.envMeshenv
     const hasWorker = workerSvc !== undefined
     const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
     const dockerfilePath = ci.docker.backend.dockerfile
@@ -694,6 +737,10 @@ module.exports = defineMeshConfig({
     const envContentLines = secrets
       .filter(k => !FIXED_KEYS.has(k))
       .map(k => '          ' + k + '=${' + k + '}')
+      .join('\n')
+    const meshenvLoadLines = this.renderMeshenvLoadShellLines(meshenvKeys)
+    const meshenvContentLines = meshenvKeys
+      .map(key => '          ' + key + '=${' + key + '}')
       .join('\n')
 
     const workerLines = hasWorker ? [
@@ -798,9 +845,11 @@ module.exports = defineMeshConfig({
       '          DEPLOY_PORT: ' + this.ghaSecret('DEPLOY_PORT'),
       envSecretsLines,
       '        run: |',
+      ...meshenvLoadLines,
       '          # Build .env content locally (never touches disk unencrypted, stays in memory)',
       '          ENV_CONTENT="NODE_ENV=production',
       '          PORT=8080',
+      meshenvContentLines,
       envContentLines + '"',
       '',
       '          # Write .env to server atomically (chmod 600 before writing content)',
@@ -932,12 +981,17 @@ module.exports = defineMeshConfig({
   ): string {
     const backendImage = apiSvc.podman.image ?? 'ghcr.io/' + this.ghaCtx('github.repository_owner') + '/' + this.config.app + '-backend:latest'
     const secrets = ci.backend.envSecrets
+    const meshenvKeys = ci.backend.envMeshenv
     const plan = ci.drs.enabled ? this.frontendDrsPlan(apiSvc) : undefined
     const runtimeBundlePath = `${RUNTIME_BUNDLE_DIR}/`
     const fixedKeys = new Set(['NODE_ENV', 'PORT', 'MESH_RUNTIME_MODE', 'PANOM_BACKEND_IMAGE', 'MESH_SECRET'])
     const envSecretsLines = secrets.map(key => '          ' + key + ': ' + this.ghaSecret(key)).join('\n')
     const envContentLines = secrets
       .filter(key => !fixedKeys.has(key))
+      .map(key => '          ' + key + '=${' + key + '}')
+      .join('\n')
+    const meshenvLoadLines = this.renderMeshenvLoadShellLines(meshenvKeys)
+    const meshenvContentLines = meshenvKeys
       .map(key => '          ' + key + '=${' + key + '}')
       .join('\n')
 
@@ -985,10 +1039,12 @@ module.exports = defineMeshConfig({
       ]
 
     const runtimeEnvLines = [
+      ...meshenvLoadLines,
       '          ENV_CONTENT="NODE_ENV=production',
       '          MESH_RUNTIME_MODE=podman',
       '          PANOM_BACKEND_IMAGE=$BACKEND_IMAGE',
       '          MESH_SECRET=$MESH_SECRET',
+      meshenvContentLines,
       envContentLines + '"',
     ]
 

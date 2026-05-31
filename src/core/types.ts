@@ -547,11 +547,15 @@ export interface MeshCiFrontendConfig {
  *
  * `envSecrets` lists the env-var names to pull from GitHub Actions secrets
  * and write to the server's `.panom.env` file.  Defaults to every key found
- * in the api/worker service env map.
+ * in the api/worker service env map minus `envMeshenv` keys.
+ *
+ * `envMeshenv` lists non-secret deploy keys read from the committed root
+ * `.meshenv` file during CI (not from GitHub Actions secrets).
  */
 export interface MeshCiBackendConfig {
   readonly strategy?: MeshCiBackendStrategy
   readonly envSecrets?: readonly string[]
+  readonly envMeshenv?: readonly string[]
 }
 
 export interface MeshCiDrsConfig {
@@ -594,6 +598,7 @@ export interface NormalizedMeshCiFrontendConfig {
 export interface NormalizedMeshCiBackendConfig {
   readonly strategy: MeshCiBackendStrategy
   readonly envSecrets: readonly string[]
+  readonly envMeshenv: readonly string[]
 }
 
 export interface NormalizedMeshCiDrsConfig {
